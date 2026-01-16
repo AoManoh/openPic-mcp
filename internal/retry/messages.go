@@ -2,9 +2,7 @@
 package retry
 
 import (
-	"fmt"
-
-	"github.com/anthropic/vision-mcp-server/internal/errors"
+	"github.com/AoManoh/openPic-mcp/internal/errors"
 )
 
 // Language represents supported languages for error messages.
@@ -305,5 +303,5 @@ func (r *MessageResolver) defaultMessage() *ErrorMessage {
 // FormatError formats an error with user-friendly message.
 func (r *MessageResolver) FormatError(err error) string {
 	msg := r.Resolve(err)
-	return fmt.Sprintf("%s: %s\n%s", msg.Title, msg.Description, msg.Suggestion)
+	return msg.Title + ": " + msg.Description + "\n" + msg.Suggestion
 }

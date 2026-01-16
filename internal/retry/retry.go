@@ -7,7 +7,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/anthropic/vision-mcp-server/internal/errors"
+	"github.com/AoManoh/openPic-mcp/internal/errors"
 )
 
 // Options configures retry behavior.

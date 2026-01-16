@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/anthropic/vision-mcp-server/pkg/types"
+	"github.com/AoManoh/openPic-mcp/pkg/types"
 )
 
 // Manager manages tool registration and execution.

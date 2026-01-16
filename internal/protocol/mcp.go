@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/anthropic/vision-mcp-server/pkg/types"
+	"github.com/AoManoh/openPic-mcp/pkg/types"
 )
 
 // ServerName is the name of the MCP server.

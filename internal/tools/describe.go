@@ -5,9 +5,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/anthropic/vision-mcp-server/internal/image"
-	"github.com/anthropic/vision-mcp-server/internal/provider"
-	"github.com/anthropic/vision-mcp-server/pkg/types"
+	"github.com/AoManoh/openPic-mcp/internal/image"
+	"github.com/AoManoh/openPic-mcp/internal/provider"
+	"github.com/AoManoh/openPic-mcp/pkg/types"
 )
 
 // DescribeImageTool is the tool definition for describe_image.

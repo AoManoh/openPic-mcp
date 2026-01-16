@@ -3,7 +3,7 @@ package retry
 import (
 	"testing"
 
-	"github.com/anthropic/vision-mcp-server/internal/errors"
+	"github.com/AoManoh/openPic-mcp/internal/errors"
 )
 
 func TestNewMessageResolver(t *testing.T) {

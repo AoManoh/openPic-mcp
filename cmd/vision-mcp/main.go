@@ -9,13 +9,13 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/anthropic/vision-mcp-server/internal/config"
-	"github.com/anthropic/vision-mcp-server/internal/protocol"
-	"github.com/anthropic/vision-mcp-server/internal/provider/openai"
-	"github.com/anthropic/vision-mcp-server/internal/service/tool"
-	"github.com/anthropic/vision-mcp-server/internal/tools"
-	"github.com/anthropic/vision-mcp-server/internal/transport"
-	"github.com/anthropic/vision-mcp-server/pkg/types"
+	"github.com/AoManoh/openPic-mcp/internal/config"
+	"github.com/AoManoh/openPic-mcp/internal/protocol"
+	"github.com/AoManoh/openPic-mcp/internal/provider/openai"
+	"github.com/AoManoh/openPic-mcp/internal/service/tool"
+	"github.com/AoManoh/openPic-mcp/internal/tools"
+	"github.com/AoManoh/openPic-mcp/internal/transport"
+	"github.com/AoManoh/openPic-mcp/pkg/types"
 )
 
 func main() {

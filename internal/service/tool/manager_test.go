@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/anthropic/vision-mcp-server/pkg/types"
+	"github.com/AoManoh/openPic-mcp/pkg/types"
 )
 
 func TestManager_Register(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/anthropic/vision-mcp-server/internal/provider"
+	"github.com/AoManoh/openPic-mcp/internal/provider"
 )
 
 // mockVisionProvider is a mock implementation of VisionProvider for testing.

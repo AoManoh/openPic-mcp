@@ -11,14 +11,12 @@ openPic-mcp 是一个基于 MCP (Model Context Protocol) 协议的 Vision 服务
 - **多种图片输入**：支持 Base64 编码、Data URI、HTTP/HTTPS URL、**本地文件路径**
 - **多种图片格式**：支持 JPEG、PNG、WebP、GIF、BMP、TIFF、ICO、HEIC、AVIF、SVG 格式
 - **图像比较**：支持 2-4 张图片的智能比较分析
-- **容器化部署**：提供 Docker 和 Docker Compose 支持
 
 ## 快速开始
 
 ### 前置条件
 
 - Go 1.23 或更高版本（本地构建）
-- Docker 和 Docker Compose（容器化部署）
 - OpenAI API 密钥或兼容服务的访问凭证
 
 ### 本地运行
@@ -26,7 +24,7 @@ openPic-mcp 是一个基于 MCP (Model Context Protocol) 协议的 Vision 服务
 1. 克隆项目
 
 ```bash
-git clone https://github.com/anthropic/openPic-mcp.git
+git clone https://github.com/AoManoh/openPic-mcp.git
 cd openPic-mcp
 ```
 
@@ -46,6 +44,11 @@ go build -o openPic-mcp ./cmd/vision-mcp
 
 ### Docker 运行
 
+> ⚠️ **注意**：当前版本仅支持 stdio 传输，Docker 部署**暂时无法直接用于 MCP 服务配置**。Docker 相关文件是为后续支持 HTTP 传输（Streamable HTTP）预留的，届时将支持端口暴露和远程调用。当前阶段请使用**本地运行**方式。
+
+<details>
+<summary>Docker 命令参考（开发测试用）</summary>
+
 1. 配置环境变量
 
 ```bash
@@ -56,7 +59,7 @@ cp .env.example .env
 2. 使用 Docker Compose 启动
 
 ```bash
-docker-compose up -d
+docker-compose up -d --build
 ```
 
 3. 查看日志
@@ -82,6 +85,8 @@ docker run -it --rm \
   -e VISION_MODEL=gpt-4o \
   openpic-mcp:latest
 ```
+
+</details>
 
 ## 配置说明
 
@@ -331,19 +336,21 @@ openPic-mcp/
 │   └── main_test.go
 ├── internal/
 │   ├── config/              # 配置管理
-│   ├── transport/           # 传输层（stdio）
+│   ├── errors/              # 错误定义
+│   ├── image/               # 图片处理（本地文件、MIME检测）
 │   ├── protocol/            # 协议层（JSON-RPC、MCP）
 │   ├── provider/            # Provider 层
 │   │   └── openai/          # OpenAI-Compatible Provider
+│   ├── retry/               # 重试机制
 │   ├── service/tool/        # 工具管理器
 │   ├── tools/               # 工具实现
 │   │   ├── describe.go      # describe_image 工具
 │   │   └── compare.go       # compare_images 工具
-│   └── image/               # 图片处理（本地文件、MIME检测）
+│   └── transport/           # 传输层（stdio）
 ├── pkg/types/               # 公共类型定义
 ├── .env.example             # 环境变量示例
-├── Dockerfile               # Docker 构建文件
-├── docker-compose.yml       # Docker Compose 配置
+├── Dockerfile               # Docker 构建文件（预留）
+├── docker-compose.yml       # Docker Compose 配置（预留）
 ├── go.mod                   # Go 模块定义
 └── README.md                # 项目文档
 ```
@@ -396,18 +403,18 @@ go vet ./...
 - ✅ OpenAI-Compatible Vision API 支持
 - ✅ describe_image 和 compare_images 工具
 - ✅ 本地文件路径支持
-- ✅ Docker 容器化部署
+- ✅ 多格式图片支持（10种格式）
 
 ### v1.x（规划中）
-- 🔲 发布到 npm，支持 `npx @anthropic/openPic-mcp` 方式调用
-- 🔲 HTTP/SSE 传输支持（Streamable HTTP）
-- 🔲 远程服务部署支持
+- 🔲 图片压缩功能（已设计，待实现）
+- 🔲 HTTP/SSE 传输支持
+- 🔲 Docker 容器化部署（依赖 HTTP 传输）
+- 🔲 发布到 npm，支持 `npx` 方式调用
 - 🔲 更多 Vision 工具（UI 分析、代码提取等）
 
 ### v2.0（远期规划）
 - 🔲 托管服务，用户无需部署即可使用
 - 🔲 多 Provider 支持（Anthropic、Google 等）
-- 🔲 图片压缩功能
 
 ## 许可证
 

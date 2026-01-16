@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/anthropic/vision-mcp-server/internal/config"
-	"github.com/anthropic/vision-mcp-server/internal/provider"
+	"github.com/AoManoh/openPic-mcp/internal/config"
+	"github.com/AoManoh/openPic-mcp/internal/provider"
 )
 
 // Provider implements the VisionProvider interface for OpenAI-compatible APIs.

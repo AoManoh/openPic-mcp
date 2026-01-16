@@ -1,3 +1,3 @@
-module github.com/anthropic/vision-mcp-server
+module github.com/AoManoh/openPic-mcp
 
-go 1.21
+go 1.23

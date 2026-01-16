@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	visionerrors "github.com/anthropic/vision-mcp-server/internal/errors"
+	visionerrors "github.com/AoManoh/openPic-mcp/internal/errors"
 )
 
 func TestDefaultOptions(t *testing.T) {

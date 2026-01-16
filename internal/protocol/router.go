@@ -3,7 +3,7 @@ package protocol
 import (
 	"sync"
 
-	"github.com/anthropic/vision-mcp-server/pkg/types"
+	"github.com/AoManoh/openPic-mcp/pkg/types"
 )
 
 // Handler is the function signature for message handlers.
