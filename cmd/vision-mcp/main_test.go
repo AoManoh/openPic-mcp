@@ -1,0 +1,186 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/anthropic/vision-mcp-server/internal/config"
+	"github.com/anthropic/vision-mcp-server/internal/protocol"
+	"github.com/anthropic/vision-mcp-server/internal/provider/openai"
+	"github.com/anthropic/vision-mcp-server/internal/service/tool"
+	"github.com/anthropic/vision-mcp-server/internal/tools"
+	"github.com/anthropic/vision-mcp-server/internal/transport"
+	"github.com/anthropic/vision-mcp-server/pkg/types"
+)
+
+// setupTestServer creates a test server with mock configuration.
+func setupTestServer() (*protocol.MCPHandler, *tool.Manager) {
+	// Create mock config
+	cfg := &config.Config{
+		APIBaseURL: "https://api.openai.com/v1",
+		APIKey:     "test-key",
+		Model:      "gpt-4o",
+	}
+
+	// Create provider
+	provider := openai.NewProvider(cfg)
+
+	// Create tool manager and register tools
+	toolManager := tool.NewManager()
+	toolManager.Register(tools.DescribeImageTool, tools.DescribeImageHandler(provider))
+
+	// Create MCP handler
+	mcpHandler := protocol.NewMCPHandler()
+
+	// Register tools handlers
+	mcpHandler.RegisterToolsHandlers(
+		func(req *types.JSONRPCRequest) (*types.JSONRPCResponse, error) {
+			result := types.ToolsListResult{
+				Tools: toolManager.List(),
+			}
+			return protocol.NewSuccessResponse(req.ID, result), nil
+		},
+		func(req *types.JSONRPCRequest) (*types.JSONRPCResponse, error) {
+			params, err := protocol.ParseToolCallParams(req)
+			if err != nil {
+				return protocol.NewInvalidParamsError(req.ID, err.Error()), nil
+			}
+			result, err := toolManager.Execute(nil, params.Name, params.Arguments)
+			if err != nil {
+				return protocol.NewToolExecutionError(req.ID, err.Error()), nil
+			}
+			return protocol.NewSuccessResponse(req.ID, result), nil
+		},
+	)
+
+	return mcpHandler, toolManager
+}
+
+func TestInitializeRequest(t *testing.T) {
+	handler, _ := setupTestServer()
+
+	// Create initialize request
+	req := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`
+
+	resp, err := handler.HandleMessage([]byte(req))
+	if err != nil {
+		t.Fatalf("HandleMessage error: %v", err)
+	}
+
+	if resp == nil {
+		t.Fatal("Response is nil")
+	}
+
+	if resp.Error != nil {
+		t.Fatalf("Response has error: %v", resp.Error)
+	}
+
+	// Verify response structure
+	result, ok := resp.Result.(types.InitializeResult)
+	if !ok {
+		t.Fatalf("Result is not InitializeResult: %T", resp.Result)
+	}
+
+	if result.ProtocolVersion != types.MCPProtocolVersion {
+		t.Errorf("ProtocolVersion = %v, want %v", result.ProtocolVersion, types.MCPProtocolVersion)
+	}
+
+	if result.ServerInfo.Name != protocol.ServerName {
+		t.Errorf("ServerInfo.Name = %v, want %v", result.ServerInfo.Name, protocol.ServerName)
+	}
+}
+
+func TestToolsListRequest(t *testing.T) {
+	handler, _ := setupTestServer()
+
+	// First initialize
+	initReq := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`
+	handler.HandleMessage([]byte(initReq))
+
+	// Send initialized notification
+	initedReq := `{"jsonrpc":"2.0","method":"notifications/initialized"}`
+	handler.HandleMessage([]byte(initedReq))
+
+	// Now test tools/list
+	req := `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`
+	resp, err := handler.HandleMessage([]byte(req))
+	if err != nil {
+		t.Fatalf("HandleMessage error: %v", err)
+	}
+
+	if resp.Error != nil {
+		t.Fatalf("Response has error: %v", resp.Error)
+	}
+
+	// Encode response to JSON for inspection
+	respJSON, _ := json.Marshal(resp)
+	t.Logf("tools/list response: %s", string(respJSON))
+
+	// Verify tools are returned
+	if resp.Result == nil {
+		t.Fatal("Result is nil")
+	}
+}
+
+func TestStdioTransportIntegration(t *testing.T) {
+	// Create a buffer to simulate stdin/stdout
+	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}` + "\n")
+	output := &bytes.Buffer{}
+
+	trans := transport.NewStdioTransportWithIO(input, output)
+
+	// Read message
+	data, err := trans.Read()
+	if err != nil {
+		t.Fatalf("Read error: %v", err)
+	}
+
+	// Verify message was read correctly
+	var req types.JSONRPCRequest
+	if err := json.Unmarshal(data, &req); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+
+	if req.Method != "initialize" {
+		t.Errorf("Method = %v, want initialize", req.Method)
+	}
+
+	// Write response
+	resp := protocol.NewSuccessResponse(req.ID, map[string]string{"status": "ok"})
+	respData, _ := protocol.EncodeResponse(resp)
+	if err := trans.Write(respData); err != nil {
+		t.Fatalf("Write error: %v", err)
+	}
+
+	// Verify output
+	if !strings.Contains(output.String(), "jsonrpc") {
+		t.Errorf("Output doesn't contain jsonrpc: %s", output.String())
+	}
+}
+
+func TestMethodNotFoundError(t *testing.T) {
+	handler, _ := setupTestServer()
+
+	// Initialize first
+	initReq := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`
+	handler.HandleMessage([]byte(initReq))
+	initedReq := `{"jsonrpc":"2.0","method":"notifications/initialized"}`
+	handler.HandleMessage([]byte(initedReq))
+
+	// Test unknown method
+	req := `{"jsonrpc":"2.0","id":2,"method":"unknown/method","params":{}}`
+	resp, err := handler.HandleMessage([]byte(req))
+	if err != nil {
+		t.Fatalf("HandleMessage error: %v", err)
+	}
+
+	if resp.Error == nil {
+		t.Fatal("Expected error response")
+	}
+
+	if resp.Error.Code != types.ErrCodeMethodNotFound {
+		t.Errorf("Error code = %v, want %v", resp.Error.Code, types.ErrCodeMethodNotFound)
+	}
+}

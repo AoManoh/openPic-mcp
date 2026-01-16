@@ -1,0 +1,70 @@
+# =============================================================================
+# openPic-mcp Docker Compose 配置
+# =============================================================================
+# 使用方法：
+#   1. 复制 .env.example 为 .env 并填写配置
+#   2. 运行：docker-compose up -d
+#   3. 查看日志：docker-compose logs -f
+#   4. 停止服务：docker-compose down
+# =============================================================================
+
+services:
+  openPic-mcp:
+    # 服务名称
+    container_name: openPic-mcp
+    
+    # 构建配置
+    build:
+      context: .
+      dockerfile: Dockerfile
+    
+    # 镜像名称（用于预构建镜像）
+    image: openpic-mcp:latest
+    
+    # 环境变量（从 .env 文件读取）
+    environment:
+      - VISION_API_BASE_URL=${VISION_API_BASE_URL}
+      - VISION_API_KEY=${VISION_API_KEY}
+      - VISION_MODEL=${VISION_MODEL}
+      - VISION_TIMEOUT=${VISION_TIMEOUT:-30}
+    
+    # 重启策略
+    # unless-stopped: 除非手动停止，否则总是重启
+    restart: unless-stopped
+    
+    # 标准输入输出配置（MCP 服务器需要）
+    stdin_open: true
+    tty: true
+    
+    # 资源限制
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
+    
+    # 日志配置
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # 健康检查
+    # 注意：MCP 服务器是 stdio 模式，无法使用 HTTP 健康检查
+    # 这里使用进程存活检查
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "openPic-mcp"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+# =============================================================================
+# 网络配置（可选）
+# =============================================================================
+# networks:
+#   default:
+#     name: openpic-network
+
