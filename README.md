@@ -2,7 +2,7 @@
 
 openPic-mcp 是一个基于 MCP (Model Context Protocol) 协议的图像能力服务器，为 AI 编程助手提供图片理解、图片比较、图片生成和图片编辑能力。它支持任何 OpenAI-Compatible 的图像 API 服务。
 
-> ⚠️ **当前版本说明**：v1.0 仅支持**本地部署**方式（stdio 传输），需要用户自行编译并配置本地可执行文件路径。后续版本将支持线上服务调用方式（类似 `npx @anthropic/openPic-mcp`），届时用户无需本地编译，可直接通过 MCP 配置使用。
+> ⚠️ **当前版本说明**：当前主路径是 stdio 传输，可使用本地编译后的可执行文件，也可通过 `go run github.com/AoManoh/openPic-mcp/cmd/vision-mcp@master` 在线拉取源码并在本机运行。`uvx` / `npx` 包装入口和远端 Streamable HTTP 服务仍属于后续规划。
 
 ## 功能特性
 
@@ -42,6 +42,44 @@ cp .env.example .env
 go build -o openPic-mcp ./cmd/vision-mcp
 ./openPic-mcp
 ```
+
+### 在线拉取运行（Go）
+
+如果本机已安装 Go 1.23 或更高版本，可以不手动克隆仓库，直接在 MCP 客户端中使用 `go run` 拉取并运行：
+
+```json
+{
+  "mcpServers": {
+    "openPic-mcp": {
+      "command": "go",
+      "args": [
+        "run",
+        "github.com/AoManoh/openPic-mcp/cmd/vision-mcp@master"
+      ],
+      "env": {
+        "OPENPIC_API_BASE_URL": "https://your-server.com/v1",
+        "OPENPIC_API_KEY": "your-api-key",
+        "OPENPIC_VISION_MODEL": "your-vision-model-name",
+        "OPENPIC_IMAGE_MODEL": "your-image-model-name",
+        "OPENPIC_TIMEOUT": "120s"
+      }
+    }
+  }
+}
+```
+
+国内网络环境下，首次运行需要下载 Go 模块和依赖，可临时在 MCP 配置的 `env` 中增加 Go 代理加速：
+
+```json
+{
+  "env": {
+    "GOPROXY": "https://goproxy.cn,direct",
+    "GOSUMDB": "sum.golang.google.cn"
+  }
+}
+```
+
+`GOPROXY` 能加速公开 Go 模块下载；`GOSUMDB` 使用 Go checksum database 的国内可访问镜像。该方式仍然需要本机安装 Go，并且首次启动会在本机下载依赖和编译，速度取决于网络和机器性能。
 
 ### Docker 运行
 
@@ -136,18 +174,12 @@ OPENPIC_IMAGE_MODEL=your-image-model-name
 
 ## MCP 配置示例
 
-> 📌 **当前版本**：需要指定本地编译后的可执行文件路径。后续版本将支持类似以下的线上调用方式：
-> ```json
-> {
->   "mcpServers": {
->     "openPic-mcp": {
->       "command": "npx",
->       "args": ["-y", "@anthropic/openPic-mcp"],
->       "env": { "OPENPIC_API_KEY": "your-api-key" }
->     }
->   }
-> }
-> ```
+当前支持两种 stdio 使用方式：
+
+- 使用本地编译后的可执行文件路径。
+- 使用 `go run github.com/AoManoh/openPic-mcp/cmd/vision-mcp@master` 在线拉取并在本机运行。
+
+`uvx` / `npx` 形式尚未提供包装入口，因此当前不能直接使用 `uvx --from git+... openpic-mcp`。如需完全免 Go 环境，需要后续提供预编译二进制下载器或独立包管理器入口。
 
 ### Claude Desktop
 
