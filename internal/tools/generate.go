@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"fmt"
-	"regexp"
 
 	"github.com/AoManoh/openPic-mcp/internal/provider"
 	"github.com/AoManoh/openPic-mcp/pkg/types"
@@ -15,7 +14,7 @@ const (
 	maxImageResults            = 1
 )
 
-var imageSizePattern = regexp.MustCompile(`^[1-9][0-9]*x[1-9][0-9]*$`)
+var supportedImageSizes = []string{"1024x1024", "1024x1536", "1536x1024", "2048x2048"}
 
 var GenerateImageTool = types.Tool{
 	Name:        "generate_image",
@@ -29,7 +28,8 @@ var GenerateImageTool = types.Tool{
 			},
 			"size": {
 				Type:        "string",
-				Description: "Optional output image size in WIDTHxHEIGHT format. Defaults to 1024x1024.",
+				Description: "Optional output image size. Defaults to 1024x1024.",
+				Enum:        supportedImageSizes,
 			},
 			"quality": {
 				Type:        "string",
@@ -37,7 +37,7 @@ var GenerateImageTool = types.Tool{
 			},
 			"response_format": {
 				Type:        "string",
-				Description: "Optional response format. Defaults to file_path. Use b64_json only when inline base64 is explicitly required.",
+				Description: "Optional response format. Defaults to file_path. Use b64_json only when inline base64 is explicitly required. If url returns a data URI, the result is saved as file_path.",
 				Enum:        []string{"file_path", "url", "b64_json"},
 				Default:     defaultImageResponseFormat,
 			},
@@ -62,8 +62,8 @@ func GenerateImageHandler(imageProvider provider.ImageProvider) types.ToolHandle
 		if size == "" {
 			size = defaultImageSize
 		}
-		if !imageSizePattern.MatchString(size) {
-			return errorResult(fmt.Sprintf("size must match WIDTHxHEIGHT using positive integers, got %q", size)), nil
+		if !containsString(supportedImageSizes, size) {
+			return errorResult(fmt.Sprintf("unsupported size %q: expected one of %v", size, supportedImageSizes)), nil
 		}
 
 		responseFormat := stringArg(args, "response_format")

@@ -378,11 +378,30 @@ func TestGenerateImageHandler_InvalidSize(t *testing.T) {
 	if !result.IsError {
 		t.Fatal("expected error for invalid size")
 	}
-	if !strings.Contains(result.Content[0].Text, "size must match WIDTHxHEIGHT") {
+	if !strings.Contains(result.Content[0].Text, "unsupported size") {
 		t.Fatalf("unexpected error: %s", result.Content[0].Text)
 	}
 	if mockProvider.generateReq != nil {
 		t.Fatal("provider should not be called for invalid size")
+	}
+}
+
+func TestGenerateImageHandler_RejectsUnsupportedSizeBeforeProvider(t *testing.T) {
+	mockProvider := &mockVisionProvider{}
+	handler := GenerateImageHandler(mockProvider)
+
+	result, err := handler(context.Background(), map[string]any{"prompt": "A cat", "size": "512x512"})
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error for unsupported size")
+	}
+	if !strings.Contains(result.Content[0].Text, "unsupported size") {
+		t.Fatalf("unexpected error: %s", result.Content[0].Text)
+	}
+	if mockProvider.generateReq != nil {
+		t.Fatal("provider should not be called for unsupported size")
 	}
 }
 
@@ -450,4 +469,71 @@ func TestEditImageHandler_DefaultsToFilePath(t *testing.T) {
 		t.Fatal("expected file_path in response")
 	}
 	defer os.Remove(payload.Images[0].FilePath)
+}
+
+func TestGenerateImageHandler_URLDataURISavedAsFilePath(t *testing.T) {
+	mockProvider := &mockVisionProvider{
+		generateResult: &provider.GenerateImageResponse{
+			Created: 123,
+			Images: []provider.GeneratedImage{
+				{URL: "data:image/png;base64," + onePixelPNGBase64},
+			},
+		},
+	}
+	handler := GenerateImageHandler(mockProvider)
+
+	result, err := handler(context.Background(), map[string]any{"prompt": "A cat", "response_format": "url"})
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success, got error: %v", result.Content)
+	}
+	if mockProvider.generateReq == nil {
+		t.Fatal("provider was not called")
+	}
+	if mockProvider.generateReq.ResponseFormat != "url" {
+		t.Fatalf("response format = %q, want url", mockProvider.generateReq.ResponseFormat)
+	}
+
+	var payload imageToolResponse
+	if err := json.Unmarshal([]byte(result.Content[0].Text), &payload); err != nil {
+		t.Fatalf("failed to decode result JSON: %v", err)
+	}
+	if len(payload.Images) != 1 {
+		t.Fatalf("images length = %d, want 1", len(payload.Images))
+	}
+	if payload.Images[0].URL != "" {
+		t.Fatalf("expected data URI url to be omitted, got %q", payload.Images[0].URL)
+	}
+	if payload.Images[0].FilePath == "" {
+		t.Fatal("expected file_path in response")
+	}
+	defer os.Remove(payload.Images[0].FilePath)
+	if strings.Contains(result.Content[0].Text, onePixelPNGBase64) {
+		t.Fatal("result still contains inline base64")
+	}
+}
+
+func TestEditImageHandler_RejectsUnsupportedSizeBeforeProvider(t *testing.T) {
+	mockProvider := &mockVisionProvider{}
+	handler := EditImageHandler(mockProvider)
+
+	result, err := handler(context.Background(), map[string]any{
+		"image":  onePixelPNGBase64,
+		"prompt": "Edit the image",
+		"size":   "512x512",
+	})
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error for unsupported size")
+	}
+	if !strings.Contains(result.Content[0].Text, "unsupported size") {
+		t.Fatalf("unexpected error: %s", result.Content[0].Text)
+	}
+	if mockProvider.editReq != nil {
+		t.Fatal("provider should not be called for unsupported size")
+	}
 }

@@ -22,16 +22,19 @@ func imageToolResult(images []provider.GeneratedImage, created int64, outputForm
 	resultImages := make([]provider.GeneratedImage, len(images))
 	copy(resultImages, images)
 
-	if outputFormat == "file_path" {
+	if outputFormat != "b64_json" {
 		for i := range resultImages {
-			if resultImages[i].B64JSON == "" {
-				continue
-			}
-			path, err := saveBase64Image(resultImages[i].B64JSON, filePrefix)
+			path, err := saveInlineImageResult(resultImages[i], filePrefix)
 			if err != nil {
 				return nil, err
 			}
+			if path == "" {
+				continue
+			}
 			resultImages[i].FilePath = path
+			if imageutil.IsDataURI(resultImages[i].URL) {
+				resultImages[i].URL = ""
+			}
 			resultImages[i].B64JSON = ""
 		}
 	}
@@ -54,6 +57,16 @@ func imageToolResult(images []provider.GeneratedImage, created int64, outputForm
 		},
 		IsError: false,
 	}, nil
+}
+
+func saveInlineImageResult(image provider.GeneratedImage, filePrefix string) (string, error) {
+	if image.B64JSON != "" {
+		return saveBase64Image(image.B64JSON, filePrefix)
+	}
+	if imageutil.IsDataURI(image.URL) {
+		return saveBase64Image(image.URL, filePrefix)
+	}
+	return "", nil
 }
 
 func saveBase64Image(encoded string, filePrefix string) (string, error) {

@@ -61,7 +61,7 @@ go build -o openPic-mcp ./cmd/vision-mcp
         "OPENPIC_API_KEY": "your-api-key",
         "OPENPIC_VISION_MODEL": "your-vision-model-name",
         "OPENPIC_IMAGE_MODEL": "your-image-model-name",
-        "OPENPIC_TIMEOUT": "120s"
+        "OPENPIC_TIMEOUT": "5m"
       }
     }
   }
@@ -138,10 +138,10 @@ docker run -it --rm \
 | `OPENPIC_API_KEY` | 是 | - | API 密钥，兼容 `VISION_API_KEY` |
 | `OPENPIC_VISION_MODEL` | 是 | - | 视觉理解模型，兼容 `VISION_MODEL` |
 | `OPENPIC_IMAGE_MODEL` | 使用 `generate_image` 或 `edit_image` 时必填 | - | 图片生成或编辑模型 |
-| `OPENPIC_TIMEOUT` | 否 | 30s | API 请求超时时间，兼容 `VISION_TIMEOUT` |
+| `OPENPIC_TIMEOUT` | 否 | 5m | API 请求超时时间，兼容 `VISION_TIMEOUT` |
 | `OPENPIC_LOG_LEVEL` | 否 | info | 日志级别，兼容 `VISION_LOG_LEVEL` |
 
-> **注意**：`OPENPIC_TIMEOUT` / `VISION_TIMEOUT` 必须使用 Go 的 duration 格式，例如：`30s`（30秒）、`2m`（2分钟）、`1m30s`（1分30秒）。纯数字如 `120` 会导致解析错误。
+> **注意**：`OPENPIC_TIMEOUT` / `VISION_TIMEOUT` 必须使用 Go 的 duration 格式，例如：`30s`（30秒）、`2m`（2分钟）、`5m`（5分钟）。纯数字如 `120` 会导致解析错误。部分图片生成或编辑模型单次推理可能需要 1-4 分钟，不建议将该值设置得过低。
 
 ### 配置示例
 
@@ -199,7 +199,7 @@ Windows: `%APPDATA%\Claude\claude_desktop_config.json`
         "OPENPIC_API_KEY": "your-api-key",
         "OPENPIC_VISION_MODEL": "gpt-4o",
         "OPENPIC_IMAGE_MODEL": "gpt-image-1",
-        "OPENPIC_TIMEOUT": "120s"
+        "OPENPIC_TIMEOUT": "5m"
       }
     }
   }
@@ -224,7 +224,7 @@ Windows: `%USERPROFILE%\.cursor\mcp.json`
         "OPENPIC_API_KEY": "your-api-key",
         "OPENPIC_VISION_MODEL": "gpt-4o",
         "OPENPIC_IMAGE_MODEL": "gpt-image-1",
-        "OPENPIC_TIMEOUT": "120s"
+        "OPENPIC_TIMEOUT": "5m"
       }
     }
   }
@@ -350,9 +350,9 @@ Windows: `%USERPROFILE%\.cursor\mcp.json`
 | 参数 | 类型 | 必填 | 说明 |
 | ---- | ---- | ---- | ---- |
 | `prompt` | string | 是 | 图片生成提示词 |
-| `size` | string | 否 | 输出尺寸，必须为 `WIDTHxHEIGHT` 格式，默认 `1024x1024` |
+| `size` | string | 否 | 输出尺寸，默认 `1024x1024`；支持 `1024x1024`、`1024x1536`、`1536x1024`、`2048x2048` |
 | `quality` | string | 否 | 输出质量，实际取值取决于服务支持情况 |
-| `response_format` | string | 否 | 响应格式：`file_path`、`url` 或 `b64_json`，默认 `file_path`；仅显式选择 `b64_json` 时返回内联 Base64 |
+| `response_format` | string | 否 | 响应格式：`file_path`、`url` 或 `b64_json`，默认 `file_path`；仅显式选择 `b64_json` 时返回内联 Base64；若上游在 `url` 模式返回 Data URI，服务端会自动落盘并返回 `file_path` |
 | `n` | number | 否 | 生成图片数量，当前仅支持 `1` |
 
 **示例请求：**
@@ -393,9 +393,9 @@ Windows: `%USERPROFILE%\.cursor\mcp.json`
 | `image` | string | 是 | 待编辑图片，支持本地文件路径、HTTP/HTTPS URL、Data URI 或原始 Base64 |
 | `prompt` | string | 是 | 图片编辑提示词 |
 | `mask` | string | 否 | 可选 mask 图片，支持本地文件路径、HTTP/HTTPS URL、Data URI 或原始 Base64 |
-| `size` | string | 否 | 输出尺寸，必须为 `WIDTHxHEIGHT` 格式，默认 `1024x1024` |
+| `size` | string | 否 | 输出尺寸，默认 `1024x1024`；支持 `1024x1024`、`1024x1536`、`1536x1024`、`2048x2048` |
 | `quality` | string | 否 | 输出质量，实际取值取决于服务支持情况 |
-| `response_format` | string | 否 | 响应格式：`file_path`、`url` 或 `b64_json`，默认 `file_path`；仅显式选择 `b64_json` 时返回内联 Base64 |
+| `response_format` | string | 否 | 响应格式：`file_path`、`url` 或 `b64_json`，默认 `file_path`；仅显式选择 `b64_json` 时返回内联 Base64；若上游在 `url` 模式返回 Data URI，服务端会自动落盘并返回 `file_path` |
 | `n` | number | 否 | 编辑结果数量，当前仅支持 `1` |
 
 **示例请求：**
@@ -425,6 +425,10 @@ Windows: `%USERPROFILE%\.cursor\mcp.json`
   ]
 }
 ```
+
+### 图片生成与编辑耗时
+
+图片生成和编辑请求会等待上游 OpenAI-Compatible 服务完成推理后再返回。部分模型（例如高质量图片生成模型）单次 1K 图片可能需要约 1-2 分钟，2K 图片可能需要约 2-4 分钟。建议将 `OPENPIC_TIMEOUT` 保持为默认 `5m` 或按实际服务耗时调大，避免服务端在上游仍在推理时提前超时。
 
 ### 支持的图片格式
 

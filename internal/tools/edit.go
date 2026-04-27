@@ -29,7 +29,8 @@ var EditImageTool = types.Tool{
 			},
 			"size": {
 				Type:        "string",
-				Description: "Optional output image size in WIDTHxHEIGHT format. Defaults to 1024x1024.",
+				Description: "Optional output image size. Defaults to 1024x1024.",
+				Enum:        supportedImageSizes,
 			},
 			"quality": {
 				Type:        "string",
@@ -37,7 +38,7 @@ var EditImageTool = types.Tool{
 			},
 			"response_format": {
 				Type:        "string",
-				Description: "Optional response format. Defaults to file_path. Use b64_json only when inline base64 is explicitly required.",
+				Description: "Optional response format. Defaults to file_path. Use b64_json only when inline base64 is explicitly required. If url returns a data URI, the result is saved as file_path.",
 				Enum:        []string{"file_path", "url", "b64_json"},
 				Default:     defaultImageResponseFormat,
 			},
@@ -71,8 +72,8 @@ func EditImageHandler(imageProvider provider.ImageProvider) types.ToolHandler {
 		if size == "" {
 			size = defaultImageSize
 		}
-		if !imageSizePattern.MatchString(size) {
-			return errorResult(fmt.Sprintf("size must match WIDTHxHEIGHT using positive integers, got %q", size)), nil
+		if !containsString(supportedImageSizes, size) {
+			return errorResult(fmt.Sprintf("unsupported size %q: expected one of %v", size, supportedImageSizes)), nil
 		}
 
 		responseFormat := stringArg(args, "response_format")

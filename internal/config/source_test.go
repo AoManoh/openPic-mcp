@@ -19,8 +19,8 @@ func TestDefaultSource(t *testing.T) {
 		t.Error("expected VISION_TIMEOUT to exist")
 	}
 
-	if s.Get("VISION_TIMEOUT") != "30s" {
-		t.Errorf("Get(VISION_TIMEOUT) = %q, want %q", s.Get("VISION_TIMEOUT"), "30s")
+	if s.Get("VISION_TIMEOUT") != "5m" {
+		t.Errorf("Get(VISION_TIMEOUT) = %q, want %q", s.Get("VISION_TIMEOUT"), "5m")
 	}
 
 	// Test SetDefault

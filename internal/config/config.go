@@ -10,7 +10,7 @@ import (
 
 // Default configuration values.
 const (
-	DefaultTimeout  = 30 * time.Second
+	DefaultTimeout  = 5 * time.Minute
 	DefaultLogLevel = "info"
 )
 
@@ -26,7 +26,7 @@ type Config struct {
 	ImageModel string // OPENPIC_IMAGE_MODEL
 
 	// Optional fields
-	Timeout  time.Duration // VISION_TIMEOUT (default: 30s)
+	Timeout  time.Duration // OPENPIC_TIMEOUT or VISION_TIMEOUT (default: 5m)
 	LogLevel string        // VISION_LOG_LEVEL (default: info)
 }
 

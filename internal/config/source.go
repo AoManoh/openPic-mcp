@@ -37,7 +37,7 @@ type DefaultSource struct {
 func NewDefaultSource() *DefaultSource {
 	return &DefaultSource{
 		defaults: map[string]string{
-			"VISION_TIMEOUT":          "30s",
+			"VISION_TIMEOUT":          "5m",
 			"VISION_LOG_LEVEL":        "info",
 			"VISION_MAX_RETRIES":      "3",
 			"VISION_RETRY_BASE_DELAY": "1s",
