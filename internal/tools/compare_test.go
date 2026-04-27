@@ -9,10 +9,14 @@ import (
 
 // mockVisionProvider is a mock implementation of VisionProvider for testing.
 type mockVisionProvider struct {
-	analyzeResult *provider.AnalyzeResponse
-	analyzeErr    error
-	compareResult *provider.CompareResponse
-	compareErr    error
+	analyzeResult  *provider.AnalyzeResponse
+	analyzeErr     error
+	compareResult  *provider.CompareResponse
+	compareErr     error
+	generateResult *provider.GenerateImageResponse
+	generateErr    error
+	editResult     *provider.EditImageResponse
+	editErr        error
 }
 
 func (m *mockVisionProvider) Name() string {
@@ -31,6 +35,20 @@ func (m *mockVisionProvider) CompareImages(ctx context.Context, req *provider.Co
 		return nil, m.compareErr
 	}
 	return m.compareResult, nil
+}
+
+func (m *mockVisionProvider) GenerateImage(ctx context.Context, req *provider.GenerateImageRequest) (*provider.GenerateImageResponse, error) {
+	if m.generateErr != nil {
+		return nil, m.generateErr
+	}
+	return m.generateResult, nil
+}
+
+func (m *mockVisionProvider) EditImage(ctx context.Context, req *provider.EditImageRequest) (*provider.EditImageResponse, error) {
+	if m.editErr != nil {
+		return nil, m.editErr
+	}
+	return m.editResult, nil
 }
 
 func TestCompareImagesHandler_Success(t *testing.T) {
@@ -164,5 +182,121 @@ func TestCompareImagesHandler_WithDetailLevel(t *testing.T) {
 
 	if result.IsError {
 		t.Errorf("expected success, got error: %v", result.Content)
+	}
+}
+
+func TestGenerateImageHandler_Success(t *testing.T) {
+	mockProvider := &mockVisionProvider{
+		generateResult: &provider.GenerateImageResponse{
+			Created: 123,
+			Images: []provider.GeneratedImage{
+				{
+					URL:           "https://example.com/image.png",
+					RevisedPrompt: "A cat",
+				},
+			},
+		},
+	}
+
+	handler := GenerateImageHandler(mockProvider)
+
+	result, err := handler(context.Background(), map[string]any{
+		"prompt":          "A cat",
+		"size":            "1024x1024",
+		"response_format": "url",
+		"n":               float64(1),
+	})
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+
+	if result.IsError {
+		t.Errorf("expected success, got error: %v", result.Content)
+	}
+	if len(result.Content) != 1 {
+		t.Fatalf("expected 1 content item, got %d", len(result.Content))
+	}
+	if result.Content[0].Text == "" {
+		t.Fatal("expected non-empty generation result")
+	}
+}
+
+func TestGenerateImageHandler_MissingPrompt(t *testing.T) {
+	handler := GenerateImageHandler(&mockVisionProvider{})
+
+	result, err := handler(context.Background(), map[string]any{})
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+
+	if !result.IsError {
+		t.Fatal("expected error for missing prompt")
+	}
+}
+
+func TestEditImageHandler_Success(t *testing.T) {
+	mockProvider := &mockVisionProvider{
+		editResult: &provider.EditImageResponse{
+			Created: 123,
+			Images: []provider.GeneratedImage{
+				{
+					URL:           "https://example.com/edited.png",
+					RevisedPrompt: "A cat with a red hat",
+				},
+			},
+		},
+	}
+
+	handler := EditImageHandler(mockProvider)
+
+	result, err := handler(context.Background(), map[string]any{
+		"image":           "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+		"prompt":          "Add a red hat",
+		"size":            "1024x1024",
+		"response_format": "url",
+		"n":               float64(1),
+	})
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+
+	if result.IsError {
+		t.Errorf("expected success, got error: %v", result.Content)
+	}
+	if len(result.Content) != 1 {
+		t.Fatalf("expected 1 content item, got %d", len(result.Content))
+	}
+	if result.Content[0].Text == "" {
+		t.Fatal("expected non-empty editing result")
+	}
+}
+
+func TestEditImageHandler_MissingImage(t *testing.T) {
+	handler := EditImageHandler(&mockVisionProvider{})
+
+	result, err := handler(context.Background(), map[string]any{
+		"prompt": "Add a red hat",
+	})
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+
+	if !result.IsError {
+		t.Fatal("expected error for missing image")
+	}
+}
+
+func TestEditImageHandler_MissingPrompt(t *testing.T) {
+	handler := EditImageHandler(&mockVisionProvider{})
+
+	result, err := handler(context.Background(), map[string]any{
+		"image": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+	})
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+
+	if !result.IsError {
+		t.Fatal("expected error for missing prompt")
 	}
 }

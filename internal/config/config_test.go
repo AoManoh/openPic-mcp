@@ -1,21 +1,36 @@
 package config
 
 import (
-	"os"
 	"testing"
 	"time"
 )
 
+func resetConfigEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"OPENPIC_API_BASE_URL",
+		"OPENPIC_API_KEY",
+		"OPENPIC_VISION_MODEL",
+		"OPENPIC_IMAGE_MODEL",
+		"OPENPIC_TIMEOUT",
+		"OPENPIC_LOG_LEVEL",
+		"VISION_API_BASE_URL",
+		"VISION_API_KEY",
+		"VISION_MODEL",
+		"VISION_TIMEOUT",
+		"VISION_LOG_LEVEL",
+	} {
+		t.Setenv(key, "")
+	}
+}
+
 func TestLoad_Success(t *testing.T) {
+	resetConfigEnv(t)
 	// Set required environment variables
-	os.Setenv("VISION_API_BASE_URL", "https://api.openai.com/v1")
-	os.Setenv("VISION_API_KEY", "sk-test-key")
-	os.Setenv("VISION_MODEL", "gpt-4o")
-	defer func() {
-		os.Unsetenv("VISION_API_BASE_URL")
-		os.Unsetenv("VISION_API_KEY")
-		os.Unsetenv("VISION_MODEL")
-	}()
+	t.Setenv("OPENPIC_API_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("OPENPIC_API_KEY", "test-key")
+	t.Setenv("OPENPIC_VISION_MODEL", "gpt-4o")
+	t.Setenv("OPENPIC_IMAGE_MODEL", "gpt-image-1")
 
 	cfg, err := Load()
 	if err != nil {
@@ -25,17 +40,67 @@ func TestLoad_Success(t *testing.T) {
 	if cfg.APIBaseURL != "https://api.openai.com/v1" {
 		t.Errorf("APIBaseURL = %v, want %v", cfg.APIBaseURL, "https://api.openai.com/v1")
 	}
-	if cfg.APIKey != "sk-test-key" {
-		t.Errorf("APIKey = %v, want %v", cfg.APIKey, "sk-test-key")
+	if cfg.APIKey != "test-key" {
+		t.Errorf("APIKey = %v, want %v", cfg.APIKey, "test-key")
 	}
 	if cfg.Model != "gpt-4o" {
 		t.Errorf("Model = %v, want %v", cfg.Model, "gpt-4o")
+	}
+	if cfg.VisionModel != "gpt-4o" {
+		t.Errorf("VisionModel = %v, want %v", cfg.VisionModel, "gpt-4o")
+	}
+	if cfg.ImageModel != "gpt-image-1" {
+		t.Errorf("ImageModel = %v, want %v", cfg.ImageModel, "gpt-image-1")
 	}
 	if cfg.Timeout != DefaultTimeout {
 		t.Errorf("Timeout = %v, want %v", cfg.Timeout, DefaultTimeout)
 	}
 	if cfg.LogLevel != DefaultLogLevel {
 		t.Errorf("LogLevel = %v, want %v", cfg.LogLevel, DefaultLogLevel)
+	}
+}
+
+func TestLoad_LegacyVisionEnv(t *testing.T) {
+	resetConfigEnv(t)
+	t.Setenv("VISION_API_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("VISION_API_KEY", "legacy-key")
+	t.Setenv("VISION_MODEL", "gpt-4o")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+
+	if cfg.APIKey != "legacy-key" {
+		t.Errorf("APIKey = %v, want %v", cfg.APIKey, "legacy-key")
+	}
+	if cfg.VisionModel != "gpt-4o" {
+		t.Errorf("VisionModel = %v, want %v", cfg.VisionModel, "gpt-4o")
+	}
+}
+
+func TestLoad_OpenPicOverridesLegacyVisionEnv(t *testing.T) {
+	resetConfigEnv(t)
+	t.Setenv("OPENPIC_API_BASE_URL", "https://openpic.example.com/v1")
+	t.Setenv("OPENPIC_API_KEY", "openpic-key")
+	t.Setenv("OPENPIC_VISION_MODEL", "openpic-vision-model")
+	t.Setenv("VISION_API_BASE_URL", "https://legacy.example.com/v1")
+	t.Setenv("VISION_API_KEY", "legacy-key")
+	t.Setenv("VISION_MODEL", "legacy-model")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+
+	if cfg.APIBaseURL != "https://openpic.example.com/v1" {
+		t.Errorf("APIBaseURL = %v, want %v", cfg.APIBaseURL, "https://openpic.example.com/v1")
+	}
+	if cfg.APIKey != "openpic-key" {
+		t.Errorf("APIKey = %v, want %v", cfg.APIKey, "openpic-key")
+	}
+	if cfg.VisionModel != "openpic-vision-model" {
+		t.Errorf("VisionModel = %v, want %v", cfg.VisionModel, "openpic-vision-model")
 	}
 }
 
@@ -48,10 +113,10 @@ func TestLoad_MissingRequired(t *testing.T) {
 		{
 			name: "missing API base URL",
 			envVars: map[string]string{
-				"VISION_API_KEY": "sk-test",
+				"VISION_API_KEY": "test-key",
 				"VISION_MODEL":   "gpt-4o",
 			},
-			wantErr: "VISION_API_BASE_URL is required",
+			wantErr: "OPENPIC_API_BASE_URL or VISION_API_BASE_URL is required",
 		},
 		{
 			name: "missing API key",
@@ -59,34 +124,26 @@ func TestLoad_MissingRequired(t *testing.T) {
 				"VISION_API_BASE_URL": "https://api.openai.com/v1",
 				"VISION_MODEL":        "gpt-4o",
 			},
-			wantErr: "VISION_API_KEY is required",
+			wantErr: "OPENPIC_API_KEY or VISION_API_KEY is required",
 		},
 		{
 			name: "missing model",
 			envVars: map[string]string{
 				"VISION_API_BASE_URL": "https://api.openai.com/v1",
-				"VISION_API_KEY":      "sk-test",
+				"VISION_API_KEY":      "test-key",
 			},
-			wantErr: "VISION_MODEL is required",
+			wantErr: "OPENPIC_VISION_MODEL or VISION_MODEL is required",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Clear all env vars first
-			os.Unsetenv("VISION_API_BASE_URL")
-			os.Unsetenv("VISION_API_KEY")
-			os.Unsetenv("VISION_MODEL")
+			resetConfigEnv(t)
 
 			// Set test env vars
 			for k, v := range tt.envVars {
-				os.Setenv(k, v)
+				t.Setenv(k, v)
 			}
-			defer func() {
-				for k := range tt.envVars {
-					os.Unsetenv(k)
-				}
-			}()
 
 			_, err := Load()
 			if err == nil {
@@ -100,16 +157,11 @@ func TestLoad_MissingRequired(t *testing.T) {
 }
 
 func TestLoad_CustomTimeout(t *testing.T) {
-	os.Setenv("VISION_API_BASE_URL", "https://api.openai.com/v1")
-	os.Setenv("VISION_API_KEY", "sk-test-key")
-	os.Setenv("VISION_MODEL", "gpt-4o")
-	os.Setenv("VISION_TIMEOUT", "60s")
-	defer func() {
-		os.Unsetenv("VISION_API_BASE_URL")
-		os.Unsetenv("VISION_API_KEY")
-		os.Unsetenv("VISION_MODEL")
-		os.Unsetenv("VISION_TIMEOUT")
-	}()
+	resetConfigEnv(t)
+	t.Setenv("VISION_API_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("VISION_API_KEY", "test-key")
+	t.Setenv("VISION_MODEL", "gpt-4o")
+	t.Setenv("VISION_TIMEOUT", "60s")
 
 	cfg, err := Load()
 	if err != nil {
@@ -122,16 +174,11 @@ func TestLoad_CustomTimeout(t *testing.T) {
 }
 
 func TestLoad_InvalidTimeout(t *testing.T) {
-	os.Setenv("VISION_API_BASE_URL", "https://api.openai.com/v1")
-	os.Setenv("VISION_API_KEY", "sk-test-key")
-	os.Setenv("VISION_MODEL", "gpt-4o")
-	os.Setenv("VISION_TIMEOUT", "invalid")
-	defer func() {
-		os.Unsetenv("VISION_API_BASE_URL")
-		os.Unsetenv("VISION_API_KEY")
-		os.Unsetenv("VISION_MODEL")
-		os.Unsetenv("VISION_TIMEOUT")
-	}()
+	resetConfigEnv(t)
+	t.Setenv("VISION_API_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("VISION_API_KEY", "test-key")
+	t.Setenv("VISION_MODEL", "gpt-4o")
+	t.Setenv("VISION_TIMEOUT", "invalid")
 
 	_, err := Load()
 	if err == nil {
@@ -149,7 +196,7 @@ func TestValidate(t *testing.T) {
 			name: "valid config",
 			config: Config{
 				APIBaseURL: "https://api.openai.com/v1",
-				APIKey:     "sk-test",
+				APIKey:     "test-key",
 				Model:      "gpt-4o",
 			},
 			wantErr: false,
@@ -157,7 +204,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "empty API base URL",
 			config: Config{
-				APIKey: "sk-test",
+				APIKey: "test-key",
 				Model:  "gpt-4o",
 			},
 			wantErr: true,

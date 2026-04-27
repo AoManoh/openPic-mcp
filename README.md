@@ -1,16 +1,17 @@
 # openPic-mcp
 
-openPic-mcp 是一个基于 MCP (Model Context Protocol) 协议的 Vision 服务器，为 AI 编程助手提供图片理解能力。它支持任何 OpenAI-Compatible 的 Vision API 服务。
+openPic-mcp 是一个基于 MCP (Model Context Protocol) 协议的图像能力服务器，为 AI 编程助手提供图片理解、图片比较、图片生成和图片编辑能力。它支持任何 OpenAI-Compatible 的图像 API 服务。
 
 > ⚠️ **当前版本说明**：v1.0 仅支持**本地部署**方式（stdio 传输），需要用户自行编译并配置本地可执行文件路径。后续版本将支持线上服务调用方式（类似 `npx @anthropic/openPic-mcp`），届时用户无需本地编译，可直接通过 MCP 配置使用。
 
 ## 功能特性
 
 - **MCP 协议兼容**：实现 MCP 协议规范，支持 stdio 传输
-- **OpenAI-Compatible**：支持任何兼容 OpenAI Vision API 格式的服务
+- **OpenAI-Compatible**：支持任何兼容 OpenAI 图像能力接口的服务
 - **多种图片输入**：支持 Base64 编码、Data URI、HTTP/HTTPS URL、**本地文件路径**
 - **多种图片格式**：支持 JPEG、PNG、WebP、GIF、BMP、TIFF、ICO、HEIC、AVIF、SVG 格式
 - **图像比较**：支持 2-4 张图片的智能比较分析
+- **图片生成与编辑**：支持通过 OpenAI-Compatible `/images/generations` 和 `/images/edits` 路由生成或编辑图片
 
 ## 快速开始
 
@@ -80,9 +81,10 @@ docker-compose down
 docker build -t openpic-mcp:latest .
 
 docker run -it --rm \
-  -e VISION_API_BASE_URL=https://api.openai.com/v1 \
-  -e VISION_API_KEY=sk-your-api-key \
-  -e VISION_MODEL=gpt-4o \
+  -e OPENPIC_API_BASE_URL=https://api.openai.com/v1 \
+  -e OPENPIC_API_KEY=your-api-key \
+  -e OPENPIC_VISION_MODEL=gpt-4o \
+  -e OPENPIC_IMAGE_MODEL=gpt-image-1 \
   openpic-mcp:latest
 ```
 
@@ -90,42 +92,46 @@ docker run -it --rm \
 
 ## 配置说明
 
-所有配置通过环境变量设置。可以创建 `.env` 文件或直接设置环境变量。
+所有配置通过环境变量设置。可以创建 `.env` 文件或直接设置环境变量。新配置优先使用 `OPENPIC_*`，并兼容旧的 `VISION_*`。
 
-| 环境变量                | 必填 | 默认值 | 说明                   |
-| ----------------------- | ---- | ------ | ---------------------- |
-| `VISION_API_BASE_URL` | 是   | -      | Vision API 基础 URL    |
-| `VISION_API_KEY`      | 是   | -      | Vision API 密钥        |
-| `VISION_MODEL`        | 是   | -      | Vision 模型名称        |
-| `VISION_TIMEOUT`      | 否   | 30s    | API 请求超时时间（需带单位，如 `30s`、`2m`） |
-| `VISION_LOG_LEVEL`    | 否   | info   | 日志级别               |
+| 环境变量 | 必填 | 默认值 | 说明 |
+| -------- | ---- | ------ | ---- |
+| `OPENPIC_API_BASE_URL` | 是 | - | OpenAI-Compatible API 基础 URL，兼容 `VISION_API_BASE_URL` |
+| `OPENPIC_API_KEY` | 是 | - | API 密钥，兼容 `VISION_API_KEY` |
+| `OPENPIC_VISION_MODEL` | 是 | - | 视觉理解模型，兼容 `VISION_MODEL` |
+| `OPENPIC_IMAGE_MODEL` | 使用 `generate_image` 或 `edit_image` 时必填 | - | 图片生成或编辑模型 |
+| `OPENPIC_TIMEOUT` | 否 | 30s | API 请求超时时间，兼容 `VISION_TIMEOUT` |
+| `OPENPIC_LOG_LEVEL` | 否 | info | 日志级别，兼容 `VISION_LOG_LEVEL` |
 
-> **注意**：`VISION_TIMEOUT` 必须使用 Go 的 duration 格式，例如：`30s`（30秒）、`2m`（2分钟）、`1m30s`（1分30秒）。纯数字如 `120` 会导致解析错误。
+> **注意**：`OPENPIC_TIMEOUT` / `VISION_TIMEOUT` 必须使用 Go 的 duration 格式，例如：`30s`（30秒）、`2m`（2分钟）、`1m30s`（1分30秒）。纯数字如 `120` 会导致解析错误。
 
 ### 配置示例
 
 OpenAI:
 
 ```bash
-VISION_API_BASE_URL=https://api.openai.com/v1
-VISION_API_KEY=sk-your-openai-api-key
-VISION_MODEL=gpt-4o
+OPENPIC_API_BASE_URL=https://api.openai.com/v1
+OPENPIC_API_KEY=your-openai-api-key
+OPENPIC_VISION_MODEL=gpt-4o
+OPENPIC_IMAGE_MODEL=gpt-image-1
 ```
 
 Azure OpenAI:
 
 ```bash
-VISION_API_BASE_URL=https://your-resource.openai.azure.com/openai/deployments/your-deployment
-VISION_API_KEY=your-azure-api-key
-VISION_MODEL=gpt-4o
+OPENPIC_API_BASE_URL=https://your-resource.openai.azure.com/openai/deployments/your-deployment
+OPENPIC_API_KEY=your-azure-api-key
+OPENPIC_VISION_MODEL=gpt-4o
+OPENPIC_IMAGE_MODEL=your-image-model-name
 ```
 
 自托管服务:
 
 ```bash
-VISION_API_BASE_URL=https://your-server.com/v1
-VISION_API_KEY=your-api-key
-VISION_MODEL=your-model-name
+OPENPIC_API_BASE_URL=https://your-server.com/v1
+OPENPIC_API_KEY=your-api-key
+OPENPIC_VISION_MODEL=your-vision-model-name
+OPENPIC_IMAGE_MODEL=your-image-model-name
 ```
 
 ## MCP 配置示例
@@ -137,7 +143,7 @@ VISION_MODEL=your-model-name
 >     "openPic-mcp": {
 >       "command": "npx",
 >       "args": ["-y", "@anthropic/openPic-mcp"],
->       "env": { "VISION_API_KEY": "sk-your-api-key" }
+>       "env": { "OPENPIC_API_KEY": "your-api-key" }
 >     }
 >   }
 > }
@@ -157,10 +163,11 @@ Windows: `%APPDATA%\Claude\claude_desktop_config.json`
       "command": "/path/to/openPic-mcp",
       "args": [],
       "env": {
-        "VISION_API_BASE_URL": "https://api.openai.com/v1",
-        "VISION_API_KEY": "sk-your-api-key",
-        "VISION_MODEL": "gpt-4o",
-        "VISION_TIMEOUT": "120s"
+        "OPENPIC_API_BASE_URL": "https://api.openai.com/v1",
+        "OPENPIC_API_KEY": "your-api-key",
+        "OPENPIC_VISION_MODEL": "gpt-4o",
+        "OPENPIC_IMAGE_MODEL": "gpt-image-1",
+        "OPENPIC_TIMEOUT": "120s"
       }
     }
   }
@@ -181,10 +188,11 @@ Windows: `%USERPROFILE%\.cursor\mcp.json`
       "command": "D:\\path\\to\\openPic-mcp.exe",
       "args": [],
       "env": {
-        "VISION_API_BASE_URL": "https://api.openai.com/v1",
-        "VISION_API_KEY": "sk-your-api-key",
-        "VISION_MODEL": "gpt-4o",
-        "VISION_TIMEOUT": "120s"
+        "OPENPIC_API_BASE_URL": "https://api.openai.com/v1",
+        "OPENPIC_API_KEY": "your-api-key",
+        "OPENPIC_VISION_MODEL": "gpt-4o",
+        "OPENPIC_IMAGE_MODEL": "gpt-image-1",
+        "OPENPIC_TIMEOUT": "120s"
       }
     }
   }
@@ -301,6 +309,91 @@ Windows: `%USERPROFILE%\.cursor\mcp.json`
 }
 ```
 
+### generate_image
+
+根据文本提示词生成图片。该工具调用 OpenAI-Compatible `/images/generations` 路由，需要配置 `OPENPIC_IMAGE_MODEL`。
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+| ---- | ---- | ---- | ---- |
+| `prompt` | string | 是 | 图片生成提示词 |
+| `size` | string | 否 | 输出尺寸，例如 `1024x1024`，实际取值取决于服务支持情况 |
+| `quality` | string | 否 | 输出质量，实际取值取决于服务支持情况 |
+| `response_format` | string | 否 | 响应格式：`url` 或 `b64_json` |
+| `n` | number | 否 | 生成图片数量 |
+
+**示例请求：**
+
+```json
+{
+  "name": "generate_image",
+  "arguments": {
+    "prompt": "一只橘猫坐在窗边，电影感光影",
+    "size": "1024x1024",
+    "response_format": "url",
+    "n": 1
+  }
+}
+```
+
+**示例响应：**
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\n  \"images\": [\n    {\n      \"url\": \"https://example.com/generated.png\"\n    }\n  ],\n  \"created\": 1234567890\n}"
+    }
+  ]
+}
+```
+
+### edit_image
+
+根据输入图片、文本提示词和可选 mask 编辑图片。该工具调用 OpenAI-Compatible `/images/edits` 路由，需要配置 `OPENPIC_IMAGE_MODEL`。
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+| ---- | ---- | ---- | ---- |
+| `image` | string | 是 | 待编辑图片，支持本地文件路径、HTTP/HTTPS URL、Data URI 或原始 Base64 |
+| `prompt` | string | 是 | 图片编辑提示词 |
+| `mask` | string | 否 | 可选 mask 图片，支持本地文件路径、HTTP/HTTPS URL、Data URI 或原始 Base64 |
+| `size` | string | 否 | 输出尺寸，例如 `1024x1024`，实际取值取决于服务支持情况 |
+| `quality` | string | 否 | 输出质量，实际取值取决于服务支持情况 |
+| `response_format` | string | 否 | 响应格式：`url` 或 `b64_json` |
+| `n` | number | 否 | 编辑结果数量 |
+
+**示例请求：**
+
+```json
+{
+  "name": "edit_image",
+  "arguments": {
+    "image": "/path/to/input.png",
+    "prompt": "给这只猫添加一顶红色帽子",
+    "size": "1024x1024",
+    "response_format": "url",
+    "n": 1
+  }
+}
+```
+
+**示例响应：**
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\n  \"images\": [\n    {\n      \"url\": \"https://example.com/edited.png\"\n    }\n  ],\n  \"created\": 1234567890\n}"
+    }
+  ]
+}
+```
+
 ### 支持的图片格式
 
 - JPEG (.jpg, .jpeg, .jpe, .jfif)
@@ -345,7 +438,9 @@ openPic-mcp/
 │   ├── service/tool/        # 工具管理器
 │   ├── tools/               # 工具实现
 │   │   ├── describe.go      # describe_image 工具
-│   │   └── compare.go       # compare_images 工具
+│   │   ├── compare.go       # compare_images 工具
+│   │   ├── generate.go      # generate_image 工具
+│   │   └── edit.go          # edit_image 工具
 │   └── transport/           # 传输层（stdio）
 ├── pkg/types/               # 公共类型定义
 ├── .env.example             # 环境变量示例
@@ -401,7 +496,7 @@ go vet ./...
 ### v1.0（当前版本）
 - ✅ MCP 协议核心实现（stdio 传输）
 - ✅ OpenAI-Compatible Vision API 支持
-- ✅ describe_image 和 compare_images 工具
+- ✅ describe_image、compare_images、generate_image 和 edit_image 工具
 - ✅ 本地文件路径支持
 - ✅ 多格式图片支持（10种格式）
 

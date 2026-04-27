@@ -7,6 +7,15 @@ type ChatCompletionRequest struct {
 	MaxTokens int       `json:"max_tokens,omitempty"`
 }
 
+type ImageGenerationRequest struct {
+	Model          string `json:"model"`
+	Prompt         string `json:"prompt"`
+	N              int    `json:"n,omitempty"`
+	Size           string `json:"size,omitempty"`
+	Quality        string `json:"quality,omitempty"`
+	ResponseFormat string `json:"response_format,omitempty"`
+}
+
 // Message represents a chat message.
 type Message struct {
 	Role    string        `json:"role"`
@@ -54,6 +63,17 @@ type UsageInfo struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+}
+
+type ImageGenerationResponse struct {
+	Created int64                `json:"created"`
+	Data    []GeneratedImageData `json:"data"`
+}
+
+type GeneratedImageData struct {
+	URL           string `json:"url,omitempty"`
+	B64JSON       string `json:"b64_json,omitempty"`
+	RevisedPrompt string `json:"revised_prompt,omitempty"`
 }
 
 // ErrorResponse represents an API error response.

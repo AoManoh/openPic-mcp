@@ -46,6 +46,24 @@ func TestStdioTransport_Read(t *testing.T) {
 	}
 }
 
+func TestStdioTransport_ReadMessageWithoutTrailingNewline(t *testing.T) {
+	reader := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"test"}`)
+	transport := NewStdioTransportWithIO(reader, &bytes.Buffer{})
+
+	got, err := transport.Read()
+	if err != nil {
+		t.Fatalf("Read() error = %v, want nil", err)
+	}
+	if string(got) != `{"jsonrpc":"2.0","id":1,"method":"test"}` {
+		t.Errorf("Read() = %v, want message", string(got))
+	}
+
+	_, err = transport.Read()
+	if err != io.EOF {
+		t.Errorf("Read() after message error = %v, want io.EOF", err)
+	}
+}
+
 func TestStdioTransport_Write(t *testing.T) {
 	writer := &bytes.Buffer{}
 	transport := NewStdioTransportWithIO(strings.NewReader(""), writer)

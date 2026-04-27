@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -44,19 +45,26 @@ func (t *StdioTransport) Read() ([]byte, error) {
 	// Read until newline
 	line, err := t.reader.ReadBytes('\n')
 	if err != nil {
+		if errors.Is(err, io.EOF) {
+			if len(line) > 0 {
+				return trimLineEnding(line), nil
+			}
+			return nil, io.EOF
+		}
 		return nil, fmt.Errorf("failed to read from stdin: %w", err)
 	}
 
-	// Trim the newline character
+	return trimLineEnding(line), nil
+}
+
+func trimLineEnding(line []byte) []byte {
 	if len(line) > 0 && line[len(line)-1] == '\n' {
 		line = line[:len(line)-1]
 	}
-	// Also trim carriage return if present (Windows)
 	if len(line) > 0 && line[len(line)-1] == '\r' {
 		line = line[:len(line)-1]
 	}
-
-	return line, nil
+	return line
 }
 
 // Write writes a message to stdout followed by a newline.

@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"strings"
 
 	"github.com/AoManoh/openPic-mcp/internal/config"
@@ -16,10 +18,11 @@ import (
 
 // Provider implements the VisionProvider interface for OpenAI-compatible APIs.
 type Provider struct {
-	client  *http.Client
-	baseURL string
-	apiKey  string
-	model   string
+	client     *http.Client
+	baseURL    string
+	apiKey     string
+	model      string
+	imageModel string
 }
 
 // NewProvider creates a new OpenAI-compatible provider.
@@ -28,9 +31,10 @@ func NewProvider(cfg *config.Config) *Provider {
 		client: &http.Client{
 			Timeout: cfg.Timeout,
 		},
-		baseURL: strings.TrimSuffix(cfg.APIBaseURL, "/"),
-		apiKey:  cfg.APIKey,
-		model:   cfg.Model,
+		baseURL:    strings.TrimSuffix(cfg.APIBaseURL, "/"),
+		apiKey:     cfg.APIKey,
+		model:      cfg.VisionModel,
+		imageModel: cfg.ImageModel,
 	}
 }
 
@@ -216,6 +220,183 @@ func (p *Provider) CompareImages(ctx context.Context, req *provider.CompareReque
 			TotalTokens:      chatResp.Usage.TotalTokens,
 		},
 	}, nil
+}
+
+func (p *Provider) GenerateImage(ctx context.Context, req *provider.GenerateImageRequest) (*provider.GenerateImageResponse, error) {
+	if p.imageModel == "" {
+		return nil, fmt.Errorf("OPENPIC_IMAGE_MODEL is required for image generation")
+	}
+
+	imageReq := &ImageGenerationRequest{
+		Model:          p.imageModel,
+		Prompt:         req.Prompt,
+		N:              req.N,
+		Size:           req.Size,
+		Quality:        req.Quality,
+		ResponseFormat: req.ResponseFormat,
+	}
+
+	body, err := json.Marshal(imageReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/images/generations", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp ErrorResponse
+		if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Error.Message != "" {
+			return nil, fmt.Errorf("API error: %s", errResp.Error.Message)
+		}
+		return nil, fmt.Errorf("API error: status %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	var imageResp ImageGenerationResponse
+	if err := json.Unmarshal(respBody, &imageResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	images := make([]provider.GeneratedImage, 0, len(imageResp.Data))
+	for _, item := range imageResp.Data {
+		images = append(images, provider.GeneratedImage{
+			URL:           item.URL,
+			B64JSON:       item.B64JSON,
+			RevisedPrompt: item.RevisedPrompt,
+		})
+	}
+
+	return &provider.GenerateImageResponse{
+		Images:  images,
+		Created: imageResp.Created,
+	}, nil
+}
+
+func (p *Provider) EditImage(ctx context.Context, req *provider.EditImageRequest) (*provider.EditImageResponse, error) {
+	if p.imageModel == "" {
+		return nil, fmt.Errorf("OPENPIC_IMAGE_MODEL is required for image editing")
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	if err := writer.WriteField("model", p.imageModel); err != nil {
+		return nil, fmt.Errorf("failed to write model field: %w", err)
+	}
+	if err := writer.WriteField("prompt", req.Prompt); err != nil {
+		return nil, fmt.Errorf("failed to write prompt field: %w", err)
+	}
+	if err := writeImagePart(writer, "image", "image", req.ImageMediaType, req.Image); err != nil {
+		return nil, err
+	}
+	if len(req.Mask) > 0 {
+		if err := writeImagePart(writer, "mask", "mask", req.MaskMediaType, req.Mask); err != nil {
+			return nil, err
+		}
+	}
+	if req.N > 0 {
+		if err := writer.WriteField("n", fmt.Sprintf("%d", req.N)); err != nil {
+			return nil, fmt.Errorf("failed to write n field: %w", err)
+		}
+	}
+	if req.Size != "" {
+		if err := writer.WriteField("size", req.Size); err != nil {
+			return nil, fmt.Errorf("failed to write size field: %w", err)
+		}
+	}
+	if req.Quality != "" {
+		if err := writer.WriteField("quality", req.Quality); err != nil {
+			return nil, fmt.Errorf("failed to write quality field: %w", err)
+		}
+	}
+	if req.ResponseFormat != "" {
+		if err := writer.WriteField("response_format", req.ResponseFormat); err != nil {
+			return nil, fmt.Errorf("failed to write response_format field: %w", err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("failed to finalize multipart request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/images/edits", &body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", writer.FormDataContentType())
+	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp ErrorResponse
+		if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Error.Message != "" {
+			return nil, fmt.Errorf("API error: %s", errResp.Error.Message)
+		}
+		return nil, fmt.Errorf("API error: status %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	var imageResp ImageGenerationResponse
+	if err := json.Unmarshal(respBody, &imageResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	images := make([]provider.GeneratedImage, 0, len(imageResp.Data))
+	for _, item := range imageResp.Data {
+		images = append(images, provider.GeneratedImage{
+			URL:           item.URL,
+			B64JSON:       item.B64JSON,
+			RevisedPrompt: item.RevisedPrompt,
+		})
+	}
+
+	return &provider.EditImageResponse{
+		Images:  images,
+		Created: imageResp.Created,
+	}, nil
+}
+
+func writeImagePart(writer *multipart.Writer, fieldName string, fileName string, mediaType string, data []byte) error {
+	header := make(textproto.MIMEHeader)
+	header.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, fieldName, fileName))
+	if mediaType == "" {
+		mediaType = "image/png"
+	}
+	header.Set("Content-Type", mediaType)
+
+	part, err := writer.CreatePart(header)
+	if err != nil {
+		return fmt.Errorf("failed to create %s part: %w", fieldName, err)
+	}
+	if _, err := part.Write(data); err != nil {
+		return fmt.Errorf("failed to write %s part: %w", fieldName, err)
+	}
+	return nil
 }
 
 // buildCompareRequest builds the chat completion request for image comparison.

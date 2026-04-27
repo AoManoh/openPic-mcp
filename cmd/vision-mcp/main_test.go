@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -19,9 +20,11 @@ import (
 func setupTestServer() (*protocol.MCPHandler, *tool.Manager) {
 	// Create mock config
 	cfg := &config.Config{
-		APIBaseURL: "https://api.openai.com/v1",
-		APIKey:     "test-key",
-		Model:      "gpt-4o",
+		APIBaseURL:  "https://api.openai.com/v1",
+		APIKey:      "test-key",
+		Model:       "gpt-4o",
+		VisionModel: "gpt-4o",
+		ImageModel:  "gpt-image-1",
 	}
 
 	// Create provider
@@ -30,6 +33,9 @@ func setupTestServer() (*protocol.MCPHandler, *tool.Manager) {
 	// Create tool manager and register tools
 	toolManager := tool.NewManager()
 	toolManager.Register(tools.DescribeImageTool, tools.DescribeImageHandler(provider))
+	toolManager.Register(tools.CompareImagesTool, tools.CompareImagesHandler(provider))
+	toolManager.Register(tools.GenerateImageTool, tools.GenerateImageHandler(provider))
+	toolManager.Register(tools.EditImageTool, tools.EditImageHandler(provider))
 
 	// Create MCP handler
 	mcpHandler := protocol.NewMCPHandler()
@@ -122,6 +128,19 @@ func TestToolsListRequest(t *testing.T) {
 	if resp.Result == nil {
 		t.Fatal("Result is nil")
 	}
+
+	if !strings.Contains(string(respJSON), "describe_image") {
+		t.Fatal("tools/list response missing describe_image")
+	}
+	if !strings.Contains(string(respJSON), "compare_images") {
+		t.Fatal("tools/list response missing compare_images")
+	}
+	if !strings.Contains(string(respJSON), "generate_image") {
+		t.Fatal("tools/list response missing generate_image")
+	}
+	if !strings.Contains(string(respJSON), "edit_image") {
+		t.Fatal("tools/list response missing edit_image")
+	}
 }
 
 func TestStdioTransportIntegration(t *testing.T) {
@@ -157,6 +176,20 @@ func TestStdioTransportIntegration(t *testing.T) {
 	// Verify output
 	if !strings.Contains(output.String(), "jsonrpc") {
 		t.Errorf("Output doesn't contain jsonrpc: %s", output.String())
+	}
+}
+
+func TestRunMessageLoopReturnsNilOnEOF(t *testing.T) {
+	handler, _ := setupTestServer()
+	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`)
+	output := &bytes.Buffer{}
+	trans := transport.NewStdioTransportWithIO(input, output)
+
+	if err := runMessageLoop(context.Background(), trans, handler); err != nil {
+		t.Fatalf("runMessageLoop() error = %v, want nil", err)
+	}
+	if !strings.Contains(output.String(), "protocolVersion") {
+		t.Fatalf("output missing initialize response: %s", output.String())
 	}
 }
 

@@ -3,7 +3,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -43,6 +45,12 @@ func main() {
 	}
 	if err := toolManager.Register(tools.CompareImagesTool, tools.CompareImagesHandler(provider)); err != nil {
 		log.Fatalf("Failed to register compare_images tool: %v", err)
+	}
+	if err := toolManager.Register(tools.GenerateImageTool, tools.GenerateImageHandler(provider)); err != nil {
+		log.Fatalf("Failed to register generate_image tool: %v", err)
+	}
+	if err := toolManager.Register(tools.EditImageTool, tools.EditImageHandler(provider)); err != nil {
+		log.Fatalf("Failed to register edit_image tool: %v", err)
 	}
 
 	// Create MCP handler
@@ -85,6 +93,9 @@ func runMessageLoop(ctx context.Context, trans *transport.StdioTransport, handle
 			// Read message
 			data, err := trans.Read()
 			if err != nil {
+				if errors.Is(err, io.EOF) {
+					return nil
+				}
 				// Check if context was cancelled
 				select {
 				case <-ctx.Done():

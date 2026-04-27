@@ -91,6 +91,15 @@ func (c *LayeredConfig) GetString(key string, defaultVal string) string {
 	return val
 }
 
+func (c *LayeredConfig) getFirst(keys ...string) string {
+	for _, key := range keys {
+		if val := c.Get(key); val != "" {
+			return val
+		}
+	}
+	return ""
+}
+
 // GetDuration returns a duration value with a default fallback.
 func (c *LayeredConfig) GetDuration(key string, defaultVal time.Duration) time.Duration {
 	return ParseDuration(c.Get(key), defaultVal)
@@ -130,12 +139,15 @@ func (c *LayeredConfig) Sources() []string {
 
 // BuildConfig builds a Config struct from the layered configuration.
 func (c *LayeredConfig) BuildConfig() (*Config, error) {
+	visionModel := c.getFirst("OPENPIC_VISION_MODEL", "VISION_MODEL")
 	cfg := &Config{
-		APIBaseURL: c.Get("VISION_API_BASE_URL"),
-		APIKey:     c.Get("VISION_API_KEY"),
-		Model:      c.Get("VISION_MODEL"),
-		Timeout:    c.GetDuration("VISION_TIMEOUT", DefaultTimeout),
-		LogLevel:   c.GetString("VISION_LOG_LEVEL", DefaultLogLevel),
+		APIBaseURL:  c.getFirst("OPENPIC_API_BASE_URL", "VISION_API_BASE_URL"),
+		APIKey:      c.getFirst("OPENPIC_API_KEY", "VISION_API_KEY"),
+		Model:       visionModel,
+		VisionModel: visionModel,
+		ImageModel:  c.Get("OPENPIC_IMAGE_MODEL"),
+		Timeout:     ParseDuration(c.getFirst("OPENPIC_TIMEOUT", "VISION_TIMEOUT"), DefaultTimeout),
+		LogLevel:    c.GetString("OPENPIC_LOG_LEVEL", c.GetString("VISION_LOG_LEVEL", DefaultLogLevel)),
 	}
 
 	if err := cfg.Validate(); err != nil {

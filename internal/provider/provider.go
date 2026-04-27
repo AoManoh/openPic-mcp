@@ -17,6 +17,12 @@ type VisionProvider interface {
 	CompareImages(ctx context.Context, req *CompareRequest) (*CompareResponse, error)
 }
 
+type ImageProvider interface {
+	Name() string
+	GenerateImage(ctx context.Context, req *GenerateImageRequest) (*GenerateImageResponse, error)
+	EditImage(ctx context.Context, req *EditImageRequest) (*EditImageResponse, error)
+}
+
 // AnalyzeRequest represents a request to analyze an image.
 type AnalyzeRequest struct {
 	// Image is the image data (base64 encoded) or URL.
@@ -77,6 +83,42 @@ type CompareResponse struct {
 
 	// Usage contains token usage information.
 	Usage *Usage
+}
+
+type GenerateImageRequest struct {
+	Prompt         string `json:"prompt"`
+	Size           string `json:"size,omitempty"`
+	Quality        string `json:"quality,omitempty"`
+	ResponseFormat string `json:"response_format,omitempty"`
+	N              int    `json:"n,omitempty"`
+}
+
+type GenerateImageResponse struct {
+	Images  []GeneratedImage `json:"images"`
+	Created int64            `json:"created"`
+}
+
+type GeneratedImage struct {
+	URL           string `json:"url,omitempty"`
+	B64JSON       string `json:"b64_json,omitempty"`
+	RevisedPrompt string `json:"revised_prompt,omitempty"`
+}
+
+type EditImageRequest struct {
+	Image          []byte
+	ImageMediaType string
+	Mask           []byte
+	MaskMediaType  string
+	Prompt         string
+	Size           string
+	Quality        string
+	ResponseFormat string
+	N              int
+}
+
+type EditImageResponse struct {
+	Images  []GeneratedImage `json:"images"`
+	Created int64            `json:"created"`
 }
 
 // DefaultPrompts contains default prompts for different analysis types.
