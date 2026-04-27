@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -187,5 +188,33 @@ func TestEditImageRequiresImageModel(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("EditImage() error = nil, want error")
+	}
+}
+
+func TestGenerateImageAPIErrorIncludesDetails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"invalid size","type":"invalid_request_error","code":"invalid_size"}}`))
+	}))
+	defer server.Close()
+
+	p := NewProvider(&config.Config{
+		APIBaseURL:  server.URL,
+		APIKey:      "test-key",
+		VisionModel: "gpt-4o",
+		ImageModel:  "gpt-image-1",
+		Timeout:     5 * time.Second,
+	})
+
+	_, err := p.GenerateImage(context.Background(), &provider.GenerateImageRequest{Prompt: "A cat", Size: "16:9"})
+	if err == nil {
+		t.Fatal("GenerateImage() error = nil, want error")
+	}
+	message := err.Error()
+	for _, want := range []string{"status 400", "invalid size", "type=invalid_request_error", "code=invalid_size"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("error %q missing %q", message, want)
+		}
 	}
 }

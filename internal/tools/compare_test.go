@@ -2,12 +2,17 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/AoManoh/openPic-mcp/internal/provider"
 )
 
 // mockVisionProvider is a mock implementation of VisionProvider for testing.
+const onePixelPNGBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+
 type mockVisionProvider struct {
 	analyzeResult  *provider.AnalyzeResponse
 	analyzeErr     error
@@ -15,8 +20,10 @@ type mockVisionProvider struct {
 	compareErr     error
 	generateResult *provider.GenerateImageResponse
 	generateErr    error
+	generateReq    *provider.GenerateImageRequest
 	editResult     *provider.EditImageResponse
 	editErr        error
+	editReq        *provider.EditImageRequest
 }
 
 func (m *mockVisionProvider) Name() string {
@@ -38,6 +45,7 @@ func (m *mockVisionProvider) CompareImages(ctx context.Context, req *provider.Co
 }
 
 func (m *mockVisionProvider) GenerateImage(ctx context.Context, req *provider.GenerateImageRequest) (*provider.GenerateImageResponse, error) {
+	m.generateReq = req
 	if m.generateErr != nil {
 		return nil, m.generateErr
 	}
@@ -45,6 +53,7 @@ func (m *mockVisionProvider) GenerateImage(ctx context.Context, req *provider.Ge
 }
 
 func (m *mockVisionProvider) EditImage(ctx context.Context, req *provider.EditImageRequest) (*provider.EditImageResponse, error) {
+	m.editReq = req
 	if m.editErr != nil {
 		return nil, m.editErr
 	}
@@ -299,4 +308,146 @@ func TestEditImageHandler_MissingPrompt(t *testing.T) {
 	if !result.IsError {
 		t.Fatal("expected error for missing prompt")
 	}
+}
+
+func TestGenerateImageHandler_DefaultsToFilePath(t *testing.T) {
+	mockProvider := &mockVisionProvider{
+		generateResult: &provider.GenerateImageResponse{
+			Created: 123,
+			Images: []provider.GeneratedImage{
+				{B64JSON: onePixelPNGBase64, RevisedPrompt: "A cat"},
+			},
+		},
+	}
+	handler := GenerateImageHandler(mockProvider)
+
+	result, err := handler(context.Background(), map[string]any{"prompt": "A cat"})
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success, got error: %v", result.Content)
+	}
+	if mockProvider.generateReq == nil {
+		t.Fatal("provider was not called")
+	}
+	if mockProvider.generateReq.Size != defaultImageSize {
+		t.Fatalf("size = %q, want %q", mockProvider.generateReq.Size, defaultImageSize)
+	}
+	if mockProvider.generateReq.ResponseFormat != "b64_json" {
+		t.Fatalf("response format = %q, want b64_json", mockProvider.generateReq.ResponseFormat)
+	}
+	if mockProvider.generateReq.N != 1 {
+		t.Fatalf("n = %d, want 1", mockProvider.generateReq.N)
+	}
+
+	var payload imageToolResponse
+	if err := json.Unmarshal([]byte(result.Content[0].Text), &payload); err != nil {
+		t.Fatalf("failed to decode result JSON: %v", err)
+	}
+	if len(payload.Images) != 1 {
+		t.Fatalf("images length = %d, want 1", len(payload.Images))
+	}
+	if payload.Images[0].B64JSON != "" {
+		t.Fatal("expected b64_json to be omitted from file_path response")
+	}
+	if payload.Images[0].FilePath == "" {
+		t.Fatal("expected file_path in response")
+	}
+	defer os.Remove(payload.Images[0].FilePath)
+	data, err := os.ReadFile(payload.Images[0].FilePath)
+	if err != nil {
+		t.Fatalf("failed to read generated file: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatal("generated file is empty")
+	}
+	if strings.Contains(result.Content[0].Text, onePixelPNGBase64) {
+		t.Fatal("result still contains inline base64")
+	}
+}
+
+func TestGenerateImageHandler_InvalidSize(t *testing.T) {
+	mockProvider := &mockVisionProvider{}
+	handler := GenerateImageHandler(mockProvider)
+
+	result, err := handler(context.Background(), map[string]any{"prompt": "A cat", "size": "16:9"})
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error for invalid size")
+	}
+	if !strings.Contains(result.Content[0].Text, "size must match WIDTHxHEIGHT") {
+		t.Fatalf("unexpected error: %s", result.Content[0].Text)
+	}
+	if mockProvider.generateReq != nil {
+		t.Fatal("provider should not be called for invalid size")
+	}
+}
+
+func TestGenerateImageHandler_RejectsMultipleResults(t *testing.T) {
+	mockProvider := &mockVisionProvider{}
+	handler := GenerateImageHandler(mockProvider)
+
+	result, err := handler(context.Background(), map[string]any{"prompt": "A cat", "n": float64(2)})
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error for n > 1")
+	}
+	if !strings.Contains(result.Content[0].Text, "supports only n=1") {
+		t.Fatalf("unexpected error: %s", result.Content[0].Text)
+	}
+	if mockProvider.generateReq != nil {
+		t.Fatal("provider should not be called for unsupported n")
+	}
+}
+
+func TestEditImageHandler_DefaultsToFilePath(t *testing.T) {
+	mockProvider := &mockVisionProvider{
+		editResult: &provider.EditImageResponse{
+			Created: 123,
+			Images: []provider.GeneratedImage{
+				{B64JSON: onePixelPNGBase64, RevisedPrompt: "A cat with a red hat"},
+			},
+		},
+	}
+	handler := EditImageHandler(mockProvider)
+
+	result, err := handler(context.Background(), map[string]any{"image": onePixelPNGBase64, "prompt": "Add a red hat"})
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success, got error: %v", result.Content)
+	}
+	if mockProvider.editReq == nil {
+		t.Fatal("provider was not called")
+	}
+	if mockProvider.editReq.Size != defaultImageSize {
+		t.Fatalf("size = %q, want %q", mockProvider.editReq.Size, defaultImageSize)
+	}
+	if mockProvider.editReq.ResponseFormat != "b64_json" {
+		t.Fatalf("response format = %q, want b64_json", mockProvider.editReq.ResponseFormat)
+	}
+	if mockProvider.editReq.N != 1 {
+		t.Fatalf("n = %d, want 1", mockProvider.editReq.N)
+	}
+
+	var payload imageToolResponse
+	if err := json.Unmarshal([]byte(result.Content[0].Text), &payload); err != nil {
+		t.Fatalf("failed to decode result JSON: %v", err)
+	}
+	if len(payload.Images) != 1 {
+		t.Fatalf("images length = %d, want 1", len(payload.Images))
+	}
+	if payload.Images[0].B64JSON != "" {
+		t.Fatal("expected b64_json to be omitted from file_path response")
+	}
+	if payload.Images[0].FilePath == "" {
+		t.Fatal("expected file_path in response")
+	}
+	defer os.Remove(payload.Images[0].FilePath)
 }

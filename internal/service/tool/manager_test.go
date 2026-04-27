@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/AoManoh/openPic-mcp/pkg/types"
@@ -121,5 +122,58 @@ func TestManager_Count(t *testing.T) {
 	m.Register(tool, handler)
 	if m.Count() != 1 {
 		t.Errorf("Count() = %d, want 1", m.Count())
+	}
+}
+
+func TestManager_ExecuteRejectsUnknownParameter(t *testing.T) {
+	m := NewManager()
+	called := false
+	tool := types.Tool{
+		Name:        "echo",
+		Description: "Echo tool",
+		InputSchema: types.InputSchema{
+			Type: "object",
+			Properties: map[string]types.Property{
+				"message": {Type: "string"},
+			},
+			Required: []string{"message"},
+		},
+	}
+	handler := func(ctx context.Context, args map[string]any) (*types.ToolCallResult, error) {
+		called = true
+		return &types.ToolCallResult{Content: []types.ContentItem{{Type: "text", Text: "ok"}}}, nil
+	}
+
+	if err := m.Register(tool, handler); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	_, err := m.Execute(context.Background(), "echo", map[string]any{"message": "hello", "extra": "ignored"})
+	if err == nil {
+		t.Fatal("Execute() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "unknown parameter") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if called {
+		t.Fatal("handler should not be called when validation fails")
+	}
+}
+
+func TestManager_ExecuteRecoversPanic(t *testing.T) {
+	m := NewManager()
+	tool := types.Tool{Name: "panic_tool", Description: "Panic tool"}
+	handler := func(ctx context.Context, args map[string]any) (*types.ToolCallResult, error) {
+		panic("boom")
+	}
+
+	if err := m.Register(tool, handler); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	_, err := m.Execute(context.Background(), "panic_tool", nil)
+	if err == nil {
+		t.Fatal("Execute() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "panicked") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

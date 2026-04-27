@@ -16,6 +16,8 @@ import (
 	"github.com/AoManoh/openPic-mcp/internal/provider"
 )
 
+const maxAPIErrorBodySnippet = 2048
+
 // Provider implements the VisionProvider interface for OpenAI-compatible APIs.
 type Provider struct {
 	client     *http.Client
@@ -79,11 +81,7 @@ func (p *Provider) AnalyzeImage(ctx context.Context, req *provider.AnalyzeReques
 
 	// Check for errors
 	if resp.StatusCode != http.StatusOK {
-		var errResp ErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Error.Message != "" {
-			return nil, fmt.Errorf("API error: %s", errResp.Error.Message)
-		}
-		return nil, fmt.Errorf("API error: status %d, body: %s", resp.StatusCode, string(respBody))
+		return nil, formatAPIError(resp.StatusCode, respBody)
 	}
 
 	// Parse response
@@ -194,11 +192,7 @@ func (p *Provider) CompareImages(ctx context.Context, req *provider.CompareReque
 
 	// Check for errors
 	if resp.StatusCode != http.StatusOK {
-		var errResp ErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Error.Message != "" {
-			return nil, fmt.Errorf("API error: %s", errResp.Error.Message)
-		}
-		return nil, fmt.Errorf("API error: status %d, body: %s", resp.StatusCode, string(respBody))
+		return nil, formatAPIError(resp.StatusCode, respBody)
 	}
 
 	// Parse response
@@ -261,11 +255,7 @@ func (p *Provider) GenerateImage(ctx context.Context, req *provider.GenerateImag
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		var errResp ErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Error.Message != "" {
-			return nil, fmt.Errorf("API error: %s", errResp.Error.Message)
-		}
-		return nil, fmt.Errorf("API error: status %d, body: %s", resp.StatusCode, string(respBody))
+		return nil, formatAPIError(resp.StatusCode, respBody)
 	}
 
 	var imageResp ImageGenerationResponse
@@ -354,11 +344,7 @@ func (p *Provider) EditImage(ctx context.Context, req *provider.EditImageRequest
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		var errResp ErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Error.Message != "" {
-			return nil, fmt.Errorf("API error: %s", errResp.Error.Message)
-		}
-		return nil, fmt.Errorf("API error: status %d, body: %s", resp.StatusCode, string(respBody))
+		return nil, formatAPIError(resp.StatusCode, respBody)
 	}
 
 	var imageResp ImageGenerationResponse
@@ -397,6 +383,29 @@ func writeImagePart(writer *multipart.Writer, fieldName string, fileName string,
 		return fmt.Errorf("failed to write %s part: %w", fieldName, err)
 	}
 	return nil
+}
+
+func formatAPIError(statusCode int, respBody []byte) error {
+	var errResp ErrorResponse
+	if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Error.Message != "" {
+		parts := []string{errResp.Error.Message}
+		if errResp.Error.Type != "" {
+			parts = append(parts, "type="+errResp.Error.Type)
+		}
+		if errResp.Error.Code != "" {
+			parts = append(parts, "code="+errResp.Error.Code)
+		}
+		return fmt.Errorf("API error: status %d: %s", statusCode, strings.Join(parts, ", "))
+	}
+	return fmt.Errorf("API error: status %d, body: %s", statusCode, truncateAPIErrorBody(string(respBody)))
+}
+
+func truncateAPIErrorBody(body string) string {
+	body = strings.TrimSpace(body)
+	if len(body) <= maxAPIErrorBodySnippet {
+		return body
+	}
+	return body[:maxAPIErrorBodySnippet] + "...(truncated)"
 }
 
 // buildCompareRequest builds the chat completion request for image comparison.

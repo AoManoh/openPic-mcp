@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	imageutil "github.com/AoManoh/openPic-mcp/internal/image"
@@ -12,7 +11,7 @@ import (
 
 var EditImageTool = types.Tool{
 	Name:        "edit_image",
-	Description: "Edit an existing image using a text prompt and optional mask with an OpenAI-compatible image editing model.",
+	Description: "Edit an existing image using a text prompt and optional mask with an OpenAI-compatible image editing model. Defaults to size 1024x1024 and response_format file_path to avoid large inline base64 responses.",
 	InputSchema: types.InputSchema{
 		Type: "object",
 		Properties: map[string]types.Property{
@@ -30,7 +29,7 @@ var EditImageTool = types.Tool{
 			},
 			"size": {
 				Type:        "string",
-				Description: "Optional output image size supported by the configured provider, such as 1024x1024.",
+				Description: "Optional output image size in WIDTHxHEIGHT format. Defaults to 1024x1024.",
 			},
 			"quality": {
 				Type:        "string",
@@ -38,12 +37,14 @@ var EditImageTool = types.Tool{
 			},
 			"response_format": {
 				Type:        "string",
-				Description: "Optional response format supported by the configured provider.",
-				Enum:        []string{"url", "b64_json"},
+				Description: "Optional response format. Defaults to file_path. Use b64_json only when inline base64 is explicitly required.",
+				Enum:        []string{"file_path", "url", "b64_json"},
+				Default:     defaultImageResponseFormat,
 			},
 			"n": {
 				Type:        "integer",
-				Description: "Optional number of edited images to return.",
+				Description: "Optional number of edited images to return. Currently only n=1 is supported.",
+				Default:     "1",
 			},
 		},
 		Required: []string{"image", "prompt"},
@@ -66,14 +67,35 @@ func EditImageHandler(imageProvider provider.ImageProvider) types.ToolHandler {
 			return errorResult(fmt.Sprintf("Failed to decode image: %v", err)), nil
 		}
 
+		size := stringArg(args, "size")
+		if size == "" {
+			size = defaultImageSize
+		}
+		if !imageSizePattern.MatchString(size) {
+			return errorResult(fmt.Sprintf("size must match WIDTHxHEIGHT using positive integers, got %q", size)), nil
+		}
+
+		responseFormat := stringArg(args, "response_format")
+		if responseFormat == "" {
+			responseFormat = defaultImageResponseFormat
+		}
+
+		n := 1
+		if _, ok := args["n"]; ok {
+			n = intArg(args, "n")
+		}
+		if n != maxImageResults {
+			return errorResult(fmt.Sprintf("n=%d is not supported: this tool currently supports only n=1", n)), nil
+		}
+
 		req := &provider.EditImageRequest{
 			Image:          imageData,
 			ImageMediaType: imageMediaType,
 			Prompt:         prompt,
-			Size:           stringArg(args, "size"),
+			Size:           size,
 			Quality:        stringArg(args, "quality"),
-			ResponseFormat: stringArg(args, "response_format"),
-			N:              intArg(args, "n"),
+			ResponseFormat: providerResponseFormat(responseFormat),
+			N:              n,
 		}
 
 		if maskInput := stringArg(args, "mask"); maskInput != "" {
@@ -93,20 +115,12 @@ func EditImageHandler(imageProvider provider.ImageProvider) types.ToolHandler {
 			return errorResult("Failed to edit image: response contained no images"), nil
 		}
 
-		resultJSON, err := json.MarshalIndent(resp, "", "  ")
+		result, err := imageToolResult(resp.Images, resp.Created, responseFormat, "edit")
 		if err != nil {
 			return errorResult(fmt.Sprintf("Failed to encode image editing result: %v", err)), nil
 		}
 
-		return &types.ToolCallResult{
-			Content: []types.ContentItem{
-				{
-					Type: "text",
-					Text: string(resultJSON),
-				},
-			},
-			IsError: false,
-		}, nil
+		return result, nil
 	}
 }
 

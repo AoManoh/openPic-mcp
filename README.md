@@ -350,10 +350,10 @@ Windows: `%USERPROFILE%\.cursor\mcp.json`
 | 参数 | 类型 | 必填 | 说明 |
 | ---- | ---- | ---- | ---- |
 | `prompt` | string | 是 | 图片生成提示词 |
-| `size` | string | 否 | 输出尺寸，例如 `1024x1024`，实际取值取决于服务支持情况 |
+| `size` | string | 否 | 输出尺寸，必须为 `WIDTHxHEIGHT` 格式，默认 `1024x1024` |
 | `quality` | string | 否 | 输出质量，实际取值取决于服务支持情况 |
-| `response_format` | string | 否 | 响应格式：`url` 或 `b64_json` |
-| `n` | number | 否 | 生成图片数量 |
+| `response_format` | string | 否 | 响应格式：`file_path`、`url` 或 `b64_json`，默认 `file_path`；仅显式选择 `b64_json` 时返回内联 Base64 |
+| `n` | number | 否 | 生成图片数量，当前仅支持 `1` |
 
 **示例请求：**
 
@@ -363,7 +363,7 @@ Windows: `%USERPROFILE%\.cursor\mcp.json`
   "arguments": {
     "prompt": "一只橘猫坐在窗边，电影感光影",
     "size": "1024x1024",
-    "response_format": "url",
+    "response_format": "file_path",
     "n": 1
   }
 }
@@ -376,7 +376,7 @@ Windows: `%USERPROFILE%\.cursor\mcp.json`
   "content": [
     {
       "type": "text",
-      "text": "{\n  \"images\": [\n    {\n      \"url\": \"https://example.com/generated.png\"\n    }\n  ],\n  \"created\": 1234567890\n}"
+      "text": "{\n  \"images\": [\n    {\n      \"file_path\": \"/tmp/openpic-mcp/generate-123456.png\"\n    }\n  ],\n  \"created\": 1234567890\n}"
     }
   ]
 }
@@ -393,10 +393,10 @@ Windows: `%USERPROFILE%\.cursor\mcp.json`
 | `image` | string | 是 | 待编辑图片，支持本地文件路径、HTTP/HTTPS URL、Data URI 或原始 Base64 |
 | `prompt` | string | 是 | 图片编辑提示词 |
 | `mask` | string | 否 | 可选 mask 图片，支持本地文件路径、HTTP/HTTPS URL、Data URI 或原始 Base64 |
-| `size` | string | 否 | 输出尺寸，例如 `1024x1024`，实际取值取决于服务支持情况 |
+| `size` | string | 否 | 输出尺寸，必须为 `WIDTHxHEIGHT` 格式，默认 `1024x1024` |
 | `quality` | string | 否 | 输出质量，实际取值取决于服务支持情况 |
-| `response_format` | string | 否 | 响应格式：`url` 或 `b64_json` |
-| `n` | number | 否 | 编辑结果数量 |
+| `response_format` | string | 否 | 响应格式：`file_path`、`url` 或 `b64_json`，默认 `file_path`；仅显式选择 `b64_json` 时返回内联 Base64 |
+| `n` | number | 否 | 编辑结果数量，当前仅支持 `1` |
 
 **示例请求：**
 
@@ -407,7 +407,7 @@ Windows: `%USERPROFILE%\.cursor\mcp.json`
     "image": "/path/to/input.png",
     "prompt": "给这只猫添加一顶红色帽子",
     "size": "1024x1024",
-    "response_format": "url",
+    "response_format": "file_path",
     "n": 1
   }
 }
@@ -420,7 +420,7 @@ Windows: `%USERPROFILE%\.cursor\mcp.json`
   "content": [
     {
       "type": "text",
-      "text": "{\n  \"images\": [\n    {\n      \"url\": \"https://example.com/edited.png\"\n    }\n  ],\n  \"created\": 1234567890\n}"
+      "text": "{\n  \"images\": [\n    {\n      \"file_path\": \"/tmp/openpic-mcp/edit-123456.png\"\n    }\n  ],\n  \"created\": 1234567890\n}"
     }
   ]
 }
