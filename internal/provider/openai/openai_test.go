@@ -26,8 +26,13 @@ func TestGenerateImage(t *testing.T) {
 			t.Fatalf("authorization header = %q", r.Header.Get("Authorization"))
 		}
 
+		rawBody, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed to read request body: %v", err)
+		}
+
 		var req ImageGenerationRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.Unmarshal(rawBody, &req); err != nil {
 			t.Fatalf("failed to decode request: %v", err)
 		}
 		if req.Model != "gpt-image-1" {
@@ -38,6 +43,15 @@ func TestGenerateImage(t *testing.T) {
 		}
 		if req.Size != "1024x1024" {
 			t.Fatalf("size = %s, want 1024x1024", req.Size)
+		}
+
+		// Phase 2 contract: upstream payload must not contain response_format.
+		var generic map[string]any
+		if err := json.Unmarshal(rawBody, &generic); err != nil {
+			t.Fatalf("failed to decode generic body: %v", err)
+		}
+		if _, present := generic["response_format"]; present {
+			t.Fatalf("upstream request must not contain response_format, body=%s", rawBody)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -54,10 +68,9 @@ func TestGenerateImage(t *testing.T) {
 	})
 
 	resp, err := p.GenerateImage(context.Background(), &provider.GenerateImageRequest{
-		Prompt:         "A cat",
-		Size:           "1024x1024",
-		ResponseFormat: "url",
-		N:              1,
+		Prompt: "A cat",
+		Size:   "1024x1024",
+		N:      1,
 	})
 	if err != nil {
 		t.Fatalf("GenerateImage() error = %v, want nil", err)
@@ -111,8 +124,9 @@ func TestEditImage(t *testing.T) {
 		if r.FormValue("size") != "1024x1024" {
 			t.Fatalf("size = %s, want 1024x1024", r.FormValue("size"))
 		}
-		if r.FormValue("response_format") != "url" {
-			t.Fatalf("response_format = %s, want url", r.FormValue("response_format"))
+		// Phase 2 contract: multipart payload must not carry response_format.
+		if _, present := r.MultipartForm.Value["response_format"]; present {
+			t.Fatalf("upstream multipart must not contain response_format, got %v", r.MultipartForm.Value["response_format"])
 		}
 
 		imageFiles := r.MultipartForm.File["image"]
@@ -157,7 +171,6 @@ func TestEditImage(t *testing.T) {
 		MaskMediaType:  "image/png",
 		Prompt:         "Add a red hat",
 		Size:           "1024x1024",
-		ResponseFormat: "url",
 		N:              1,
 	})
 	if err != nil {
@@ -236,10 +249,9 @@ func TestGenerateImageTemporaryUpstreamErrorIncludesHint(t *testing.T) {
 	})
 
 	_, err := p.GenerateImage(context.Background(), &provider.GenerateImageRequest{
-		Prompt:         "A cat",
-		Size:           "1024x1024",
-		ResponseFormat: "b64_json",
-		N:              1,
+		Prompt: "A cat",
+		Size:   "1024x1024",
+		N:      1,
 	})
 	if err == nil {
 		t.Fatal("GenerateImage() error = nil, want error")

@@ -85,12 +85,25 @@ type CompareResponse struct {
 	Usage *Usage
 }
 
+// GenerateImageRequest is the domain-level request used by tool handlers.
+//
+// The MCP-facing response_format parameter is intentionally NOT part of this
+// struct: it controls how the result is delivered back to the MCP client and
+// is handled at the tool layer. Whether the upstream API receives any
+// response_format hint is decided inside the provider implementation, so the
+// domain stays decoupled from the upstream wire format. See
+// docs/refactor/2026-04-28-decoupling-plan.md (Phase 2).
+//
+// OutputFormat (Phase 6a) selects the encoding of the generated image bytes
+// (png / jpeg / webp). It is forwarded to the upstream API when set so the
+// model can produce the requested encoding directly; an empty string lets
+// the upstream pick its default.
 type GenerateImageRequest struct {
-	Prompt         string `json:"prompt"`
-	Size           string `json:"size,omitempty"`
-	Quality        string `json:"quality,omitempty"`
-	ResponseFormat string `json:"response_format,omitempty"`
-	N              int    `json:"n,omitempty"`
+	Prompt       string `json:"prompt"`
+	Size         string `json:"size,omitempty"`
+	Quality      string `json:"quality,omitempty"`
+	OutputFormat string `json:"output_format,omitempty"`
+	N            int    `json:"n,omitempty"`
 }
 
 type GenerateImageResponse struct {
@@ -105,6 +118,13 @@ type GeneratedImage struct {
 	RevisedPrompt string `json:"revised_prompt,omitempty"`
 }
 
+// EditImageRequest is the domain-level request used by tool handlers.
+//
+// As with GenerateImageRequest, the MCP-facing response_format is excluded:
+// it is a delivery concern owned by the tool layer. The provider decides what
+// (if anything) to forward to the upstream API so the domain stays portable
+// across providers. OutputFormat (Phase 6a) follows the same conventions as
+// in GenerateImageRequest.
 type EditImageRequest struct {
 	Image          []byte
 	ImageMediaType string
@@ -113,7 +133,7 @@ type EditImageRequest struct {
 	Prompt         string
 	Size           string
 	Quality        string
-	ResponseFormat string
+	OutputFormat   string
 	N              int
 }
 

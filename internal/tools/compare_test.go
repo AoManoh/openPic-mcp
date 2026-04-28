@@ -334,9 +334,10 @@ func TestGenerateImageHandler_DefaultsToFilePath(t *testing.T) {
 	if mockProvider.generateReq.Size != defaultImageSize {
 		t.Fatalf("size = %q, want %q", mockProvider.generateReq.Size, defaultImageSize)
 	}
-	if mockProvider.generateReq.ResponseFormat != "b64_json" {
-		t.Fatalf("response format = %q, want b64_json", mockProvider.generateReq.ResponseFormat)
-	}
+	// Phase 2 contract: response_format is owned by the tool layer and must
+	// no longer leak into provider requests. The compile-time absence of
+	// ResponseFormat on GenerateImageRequest enforces this; the surrounding
+	// payload assertions confirm the tool-side delivery semantics.
 	if mockProvider.generateReq.N != 1 {
 		t.Fatalf("n = %d, want 1", mockProvider.generateReq.N)
 	}
@@ -448,9 +449,7 @@ func TestEditImageHandler_DefaultsToFilePath(t *testing.T) {
 	if mockProvider.editReq.Size != defaultImageSize {
 		t.Fatalf("size = %q, want %q", mockProvider.editReq.Size, defaultImageSize)
 	}
-	if mockProvider.editReq.ResponseFormat != "b64_json" {
-		t.Fatalf("response format = %q, want b64_json", mockProvider.editReq.ResponseFormat)
-	}
+	// Phase 2 contract: response_format is owned by the tool layer.
 	if mockProvider.editReq.N != 1 {
 		t.Fatalf("n = %d, want 1", mockProvider.editReq.N)
 	}
@@ -492,9 +491,9 @@ func TestGenerateImageHandler_URLDataURISavedAsFilePath(t *testing.T) {
 	if mockProvider.generateReq == nil {
 		t.Fatal("provider was not called")
 	}
-	if mockProvider.generateReq.ResponseFormat != "url" {
-		t.Fatalf("response format = %q, want url", mockProvider.generateReq.ResponseFormat)
-	}
+	// Phase 2 contract: requesting response_format=url at the MCP layer must
+	// still be transparent to the provider; see the payload assertions below
+	// for the user-visible delivery shape.
 
 	var payload imageToolResponse
 	if err := json.Unmarshal([]byte(result.Content[0].Text), &payload); err != nil {

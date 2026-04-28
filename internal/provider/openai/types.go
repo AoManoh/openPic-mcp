@@ -7,13 +7,23 @@ type ChatCompletionRequest struct {
 	MaxTokens int       `json:"max_tokens,omitempty"`
 }
 
+// ImageGenerationRequest is the wire payload for /v1/images/generations.
+//
+// response_format is intentionally omitted: GPT image models always return
+// b64_json and the parameter is rejected on some compatible proxies. The
+// tool layer is the sole source of truth for how results are delivered to
+// the MCP client. See docs/refactor/2026-04-28-decoupling-plan.md (Phase 2).
+//
+// OutputFormat is included as an optional field (Phase 6a) so callers can
+// request a specific encoding (png / jpeg / webp). When empty the upstream
+// chooses its default and the field is omitted from the marshalled JSON.
 type ImageGenerationRequest struct {
-	Model          string `json:"model"`
-	Prompt         string `json:"prompt"`
-	N              int    `json:"n,omitempty"`
-	Size           string `json:"size,omitempty"`
-	Quality        string `json:"quality,omitempty"`
-	ResponseFormat string `json:"response_format,omitempty"`
+	Model        string `json:"model"`
+	Prompt       string `json:"prompt"`
+	N            int    `json:"n,omitempty"`
+	Size         string `json:"size,omitempty"`
+	Quality      string `json:"quality,omitempty"`
+	OutputFormat string `json:"output_format,omitempty"`
 }
 
 // Message represents a chat message.
