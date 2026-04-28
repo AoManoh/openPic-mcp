@@ -32,6 +32,8 @@ type ImageCapabilities struct {
 	AspectRatios                    []string          `json:"aspect_ratios"`
 	AspectRatioToSize               map[string]string `json:"aspect_ratio_to_size"`
 	OutputFormats                   []string          `json:"output_formats"`
+	OutputFormatEnforcement         string            `json:"output_format_enforcement"`
+	OutputFormatNotes               string            `json:"output_format_notes"`
 	ResponseFormats                 []string          `json:"response_formats"`
 	DefaultSize                     string            `json:"default_size"`
 	DefaultResponseFormat           string            `json:"default_response_format"`
@@ -53,6 +55,8 @@ func ListImageCapabilitiesHandler() types.ToolHandler {
 			AspectRatios:                    append([]string(nil), supportedAspectRatios...),
 			AspectRatioToSize:               copyAspectRatioMap(),
 			OutputFormats:                   append([]string(nil), supportedOutputFormats...),
+			OutputFormatEnforcement:         "advisory",
+			OutputFormatNotes:               "openPic-mcp forwards output_format verbatim to the upstream API but cannot enforce it. Some OpenAI-compatible providers (notably gpt-image-1 /v1/images/edits and several proxies such as sub2api) silently ignore output_format=webp and return PNG instead. Each ImageResult therefore carries a magic-byte-detected format field, and imageToolResponse.warnings reports any mismatch so callers can react.",
 			ResponseFormats:                 []string{"file_path", "url", "b64_json"},
 			DefaultSize:                     defaultImageSize,
 			DefaultResponseFormat:           defaultImageResponseFormat,

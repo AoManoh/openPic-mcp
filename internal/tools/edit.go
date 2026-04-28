@@ -132,7 +132,7 @@ func EditImageHandler(imageProvider provider.ImageProvider) types.ToolHandler {
 			return errorResult("Failed to edit image: response contained no images"), nil
 		}
 
-		result, err := imageToolResult(imageResultsFromProvider(resp.Images), resp.Created, responseFormat, "edit")
+		result, err := imageToolResult(imageResultsFromProvider(resp.Images), resp.Created, responseFormat, outputFormat, "edit")
 		if err != nil {
 			return errorResult(fmt.Sprintf("Failed to encode image editing result: %v", err)), nil
 		}

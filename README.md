@@ -459,6 +459,18 @@ Windows: `%USERPROFILE%\.cursor\mcp.json`
 
 `output_format` 用于控制上游生成图片的编码格式（`png` / `jpeg` / `webp`），openPic-mcp 会原样转发到上游。该字段是可选的，留空则使用上游默认（通常为 `png`）。
 
+> **声明 vs 实际**：`output_format` 是 advisory 字段，openPic-mcp **无法强制兑现**。社区已确认部分 OpenAI-Compatible 实现会静默吞掉 `output_format`：
+>
+> - OpenAI 官方 `gpt-image-1` 在 `/v1/images/edits` 端点对 `output_format=webp` 直接返回 400 `"Supported values are: 'png' and 'jpeg'"`。
+> - 多个第三方代理（如 sub2api）会返回成功响应但实际内容仍为 PNG。
+>
+> 为此 openPic-mcp 会在每张返回图片上做 magic bytes 检测，并通过两条额外字段告诉调用方真实情况：
+>
+> - `images[i].format`：实际检测到的格式（`png` / `jpeg` / `webp` 等），文件扩展名也按这个值打。
+> - `warnings[]`：当请求的 `output_format` 与检测格式不一致时附加的提示（例如 `images[0]: requested output_format="webp" but upstream returned "png"; saved as .png`）。
+>
+> 调用 `list_image_capabilities` 可拿到 `output_format_enforcement: "advisory"` 与 `output_format_notes` 完整披露。
+
 #### 502 / `upstream_error` 误读指南
 
 `OpenAI-Compatible` 图像上游可能把多种失败都包装为 `502 upstream_error`。常见情况包括：

@@ -114,7 +114,7 @@ func GenerateImageHandler(imageProvider provider.ImageProvider) types.ToolHandle
 			return errorResult("Failed to generate image: response contained no images"), nil
 		}
 
-		result, err := imageToolResult(imageResultsFromProvider(resp.Images), resp.Created, responseFormat, "generate")
+		result, err := imageToolResult(imageResultsFromProvider(resp.Images), resp.Created, responseFormat, outputFormat, "generate")
 		if err != nil {
 			return errorResult(fmt.Sprintf("Failed to encode image generation result: %v", err)), nil
 		}

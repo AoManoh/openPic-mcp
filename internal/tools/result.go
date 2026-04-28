@@ -11,10 +11,18 @@ import "github.com/AoManoh/openPic-mcp/internal/provider"
 // ImageResult before delegating to imageToolResult, which decides whether to
 // embed inline base64, expose a URL, or save the bytes to a temp file
 // according to the user-requested response_format.
+//
+// Format is the format actually detected from the response payload via
+// magic bytes (e.g. "png" / "jpeg" / "webp"). It is filled in by the tool
+// layer rather than the provider so that callers always receive a single
+// authoritative source of truth, even when the upstream API silently
+// ignores the requested output_format. Empty when the payload could not
+// be decoded (for example a real HTTP URL the upstream returns directly).
 type ImageResult struct {
 	URL           string `json:"url,omitempty"`
 	B64JSON       string `json:"b64_json,omitempty"`
 	FilePath      string `json:"file_path,omitempty"`
+	Format        string `json:"format,omitempty"`
 	RevisedPrompt string `json:"revised_prompt,omitempty"`
 }
 

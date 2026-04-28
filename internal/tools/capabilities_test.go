@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -75,6 +76,22 @@ func TestListImageCapabilitiesHandler_ReturnsKnownEnums(t *testing.T) {
 	}
 	if caps.UpstreamResponseFormatRationale == "" {
 		t.Error("upstream_response_format_rationale must not be empty")
+	}
+
+	// output_format is advisory: openPic-mcp cannot guarantee the upstream
+	// honours the requested encoding, so list_image_capabilities must
+	// expose the enforcement level explicitly together with a non-empty
+	// note that points callers to the magic-byte format/warnings fields.
+	if caps.OutputFormatEnforcement != "advisory" {
+		t.Errorf("output_format_enforcement = %q, want %q", caps.OutputFormatEnforcement, "advisory")
+	}
+	if caps.OutputFormatNotes == "" {
+		t.Error("output_format_notes must not be empty")
+	}
+	for _, token := range []string{"webp", "format", "warnings"} {
+		if !strings.Contains(caps.OutputFormatNotes, token) {
+			t.Errorf("output_format_notes missing token %q: %q", token, caps.OutputFormatNotes)
+		}
 	}
 }
 
