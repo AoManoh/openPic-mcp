@@ -395,9 +395,16 @@ func formatAPIError(statusCode int, respBody []byte) error {
 		if errResp.Error.Code != "" {
 			parts = append(parts, "code="+errResp.Error.Code)
 		}
+		if isTemporaryUpstreamStatus(statusCode) {
+			parts = append(parts, "hint=upstream service is temporarily unavailable; retry later or check provider logs")
+		}
 		return fmt.Errorf("API error: status %d: %s", statusCode, strings.Join(parts, ", "))
 	}
-	return fmt.Errorf("API error: status %d, body: %s", statusCode, truncateAPIErrorBody(string(respBody)))
+	parts := []string{"body: " + truncateAPIErrorBody(string(respBody))}
+	if isTemporaryUpstreamStatus(statusCode) {
+		parts = append(parts, "hint=upstream service is temporarily unavailable; retry later or check provider logs")
+	}
+	return fmt.Errorf("API error: status %d, %s", statusCode, strings.Join(parts, ", "))
 }
 
 func truncateAPIErrorBody(body string) string {
@@ -406,6 +413,10 @@ func truncateAPIErrorBody(body string) string {
 		return body
 	}
 	return body[:maxAPIErrorBodySnippet] + "...(truncated)"
+}
+
+func isTemporaryUpstreamStatus(statusCode int) bool {
+	return statusCode == http.StatusBadGateway || statusCode == http.StatusServiceUnavailable || statusCode == http.StatusGatewayTimeout
 }
 
 // buildCompareRequest builds the chat completion request for image comparison.

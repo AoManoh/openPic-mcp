@@ -218,3 +218,36 @@ func TestGenerateImageAPIErrorIncludesDetails(t *testing.T) {
 		}
 	}
 }
+
+func TestGenerateImageTemporaryUpstreamErrorIncludesHint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"error":{"message":"Upstream service temporarily unavailable","type":"upstream_error"}}`))
+	}))
+	defer server.Close()
+
+	p := NewProvider(&config.Config{
+		APIBaseURL:  server.URL,
+		APIKey:      "test-key",
+		VisionModel: "gpt-4o",
+		ImageModel:  "gpt-image-1",
+		Timeout:     5 * time.Second,
+	})
+
+	_, err := p.GenerateImage(context.Background(), &provider.GenerateImageRequest{
+		Prompt:         "A cat",
+		Size:           "1024x1024",
+		ResponseFormat: "b64_json",
+		N:              1,
+	})
+	if err == nil {
+		t.Fatal("GenerateImage() error = nil, want error")
+	}
+	message := err.Error()
+	for _, want := range []string{"status 502", "Upstream service temporarily unavailable", "type=upstream_error", "hint=upstream service is temporarily unavailable"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("GenerateImage() error = %q, want to contain %q", message, want)
+		}
+	}
+}
