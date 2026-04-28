@@ -53,6 +53,7 @@ func imageToolResult(
 	var warnings []string
 	for i := range resultImages {
 		var detectedFormat string
+		var savedExtension string
 		if responseFormat != "b64_json" {
 			path, format, err := saveInlineImageResult(resultImages[i], filePrefix)
 			if err != nil {
@@ -64,6 +65,7 @@ func imageToolResult(
 					resultImages[i].URL = ""
 				}
 				resultImages[i].B64JSON = ""
+				savedExtension = extensionForFormat(format)
 			}
 			detectedFormat = format
 		} else {
@@ -78,7 +80,7 @@ func imageToolResult(
 			resultImages[i].Format = detectedFormat
 		}
 
-		if msg := outputFormatMismatchWarning(requestedOutputFormat, detectedFormat, i); msg != "" {
+		if msg := outputFormatMismatchWarning(requestedOutputFormat, detectedFormat, savedExtension, i); msg != "" {
 			warnings = append(warnings, msg)
 		}
 	}
@@ -184,7 +186,7 @@ func canonicalFormat(data []byte, mimeType string) string {
 // caller did not specify a format, when detection failed, or when the two
 // values agree after canonicalisation. The index is included verbatim so
 // multi-image responses remain decipherable.
-func outputFormatMismatchWarning(requested string, detected string, index int) string {
+func outputFormatMismatchWarning(requested string, detected string, savedExtension string, index int) string {
 	if requested == "" || detected == "" {
 		return ""
 	}
@@ -195,11 +197,15 @@ func outputFormatMismatchWarning(requested string, detected string, index int) s
 	if want == detected {
 		return ""
 	}
+	delivery := "inline payload retained."
+	if savedExtension != "" {
+		delivery = fmt.Sprintf("saved as .%s.", savedExtension)
+	}
 	return fmt.Sprintf(
 		"images[%d]: requested output_format=%q but upstream returned %q; "+
-			"saved as .%s. Some OpenAI-compatible providers (e.g. gpt-image-1 /v1/images/edits) "+
+			"%s Some OpenAI-compatible providers (e.g. gpt-image-1 /v1/images/edits) "+
 			"silently ignore unsupported output formats and fall back to PNG.",
-		index, requested, detected, extensionForFormat(detected),
+		index, requested, detected, delivery,
 	)
 }
 

@@ -26,6 +26,9 @@ var CompareImagesTool = types.Tool{
 			"images": {
 				Type:        "array",
 				Description: "Array of images to compare. Each image can be a base64-encoded image data, a URL pointing to an image, or a local file path. Minimum 2 images, maximum 4 images.",
+				Items:       &types.Property{Type: "string"},
+				MinItems:    MinImages,
+				MaxItems:    DefaultMaxImages,
 			},
 			"prompt": {
 				Type:        "string",

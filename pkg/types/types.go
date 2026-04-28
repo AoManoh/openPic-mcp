@@ -124,10 +124,13 @@ type InputSchema struct {
 
 // Property defines a property in the input schema.
 type Property struct {
-	Type        string   `json:"type"`
-	Description string   `json:"description,omitempty"`
-	Enum        []string `json:"enum,omitempty"`
-	Default     string   `json:"default,omitempty"`
+	Type        string    `json:"type"`
+	Description string    `json:"description,omitempty"`
+	Enum        []string  `json:"enum,omitempty"`
+	Default     string    `json:"default,omitempty"`
+	Items       *Property `json:"items,omitempty"`
+	MinItems    int       `json:"minItems,omitempty"`
+	MaxItems    int       `json:"maxItems,omitempty"`
 }
 
 // ToolsListResult represents the result of tools/list request.

@@ -135,6 +135,37 @@ func TestImageToolResult_B64JSON_PopulatesFormatWithoutPersisting(t *testing.T) 
 	}
 }
 
+func TestImageToolResult_B64JSONMismatchWarningDoesNotClaimFileSaved(t *testing.T) {
+	images := []ImageResult{
+		{B64JSON: onePixelPNGBase64},
+	}
+
+	result, err := imageToolResult(images, 100, "b64_json", "webp", "test-b64-mismatch")
+	if err != nil {
+		t.Fatalf("imageToolResult returned error: %v", err)
+	}
+
+	var payload imageToolResponse
+	if err := json.Unmarshal([]byte(result.Content[0].Text), &payload); err != nil {
+		t.Fatalf("failed to decode result JSON: %v", err)
+	}
+	if payload.Images[0].FilePath != "" {
+		t.Errorf("FilePath must remain empty for b64_json delivery, got %q", payload.Images[0].FilePath)
+	}
+	if payload.Images[0].Format != "png" {
+		t.Errorf("Format = %q, want %q", payload.Images[0].Format, "png")
+	}
+	if len(payload.Warnings) != 1 {
+		t.Fatalf("warnings length = %d, want 1", len(payload.Warnings))
+	}
+	if strings.Contains(payload.Warnings[0], "saved as") {
+		t.Fatalf("b64_json mismatch warning must not claim a file was saved: %q", payload.Warnings[0])
+	}
+	if !strings.Contains(payload.Warnings[0], "inline payload retained") {
+		t.Fatalf("b64_json mismatch warning must mention inline payload: %q", payload.Warnings[0])
+	}
+}
+
 // End-to-end through GenerateImageHandler: requesting webp from a provider
 // that returns PNG should still succeed but surface the mismatch warning so
 // the user (or upstream agent) knows the contract was downgraded.
