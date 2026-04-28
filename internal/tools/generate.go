@@ -28,12 +28,22 @@ var GenerateImageTool = types.Tool{
 			},
 			"size": {
 				Type:        "string",
-				Description: "Optional output image size. Defaults to 1024x1024.",
+				Description: "Optional output image size. Defaults to 1024x1024. Mutually exclusive with aspect_ratio: when both are provided, size wins.",
 				Enum:        supportedImageSizes,
+			},
+			"aspect_ratio": {
+				Type:        "string",
+				Description: "Optional aspect ratio. Mapped onto a supported size: 1:1=1024x1024, 4:3=1536x1024, 3:4=1024x1536, 16:9 and 9:16 use the nearest landscape/portrait preset, auto leaves the upstream default.",
+				Enum:        supportedAspectRatios,
 			},
 			"quality": {
 				Type:        "string",
 				Description: "Optional output quality supported by the configured provider.",
+			},
+			"output_format": {
+				Type:        "string",
+				Description: "Optional output image encoding forwarded to the upstream image API.",
+				Enum:        supportedOutputFormats,
 			},
 			"response_format": {
 				Type:        "string",
@@ -58,12 +68,17 @@ func GenerateImageHandler(imageProvider provider.ImageProvider) types.ToolHandle
 			return errorResult("prompt parameter is required and must be a string"), nil
 		}
 
-		size := stringArg(args, "size")
-		if size == "" {
-			size = defaultImageSize
+		// Phase 6b: size and aspect_ratio share the same downstream slot.
+		// resolveImageSize centralises the precedence rules so generate_image
+		// and edit_image stay in sync.
+		size, err := resolveImageSize(stringArg(args, "size"), stringArg(args, "aspect_ratio"))
+		if err != nil {
+			return errorResult(err.Error()), nil
 		}
-		if !containsString(supportedImageSizes, size) {
-			return errorResult(fmt.Sprintf("unsupported size %q: expected one of %v", size, supportedImageSizes)), nil
+
+		outputFormat := stringArg(args, "output_format")
+		if err := validateOutputFormat(outputFormat); err != nil {
+			return errorResult(err.Error()), nil
 		}
 
 		responseFormat := stringArg(args, "response_format")
@@ -79,12 +94,16 @@ func GenerateImageHandler(imageProvider provider.ImageProvider) types.ToolHandle
 			return errorResult(fmt.Sprintf("n=%d is not supported: this tool currently supports only n=1", n)), nil
 		}
 
+		// response_format is purely an MCP-side delivery hint after Phase 2.
+		// The provider decides whether to forward anything to the upstream
+		// API; the tool layer below decides how to wrap the response (b64
+		// inline vs. file path) using responseFormat.
 		req := &provider.GenerateImageRequest{
-			Prompt:         prompt,
-			Size:           size,
-			Quality:        stringArg(args, "quality"),
-			ResponseFormat: providerResponseFormat(responseFormat),
-			N:              n,
+			Prompt:       prompt,
+			Size:         size,
+			Quality:      stringArg(args, "quality"),
+			OutputFormat: outputFormat,
+			N:            n,
 		}
 
 		resp, err := imageProvider.GenerateImage(ctx, req)
@@ -95,20 +114,13 @@ func GenerateImageHandler(imageProvider provider.ImageProvider) types.ToolHandle
 			return errorResult("Failed to generate image: response contained no images"), nil
 		}
 
-		result, err := imageToolResult(resp.Images, resp.Created, responseFormat, "generate")
+		result, err := imageToolResult(imageResultsFromProvider(resp.Images), resp.Created, responseFormat, "generate")
 		if err != nil {
 			return errorResult(fmt.Sprintf("Failed to encode image generation result: %v", err)), nil
 		}
 
 		return result, nil
 	}
-}
-
-func providerResponseFormat(responseFormat string) string {
-	if responseFormat == defaultImageResponseFormat {
-		return "b64_json"
-	}
-	return responseFormat
 }
 
 func stringArg(args map[string]any, key string) string {

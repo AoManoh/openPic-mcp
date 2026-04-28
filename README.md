@@ -426,6 +426,49 @@ Windows: `%USERPROFILE%\.cursor\mcp.json`
 }
 ```
 
+### 图片生成与编辑兼容性说明
+
+以下说明仅适用于 `generate_image` 与 `edit_image`，对 `describe_image` / `compare_images` 不生效。
+
+#### `response_format` 语义
+
+`response_format` 是**纯 MCP 客户端侧的交付方式**：
+
+- `file_path`（默认）：openPic-mcp 把上游返回的 base64 字节落到本地临时文件，客户端只看到 `file_path`，避免在 MCP 消息中传输大段 base64。
+- `b64_json`：openPic-mcp 在响应中保留 base64 字段，适用于客户端需要直接拿到字节的场景。
+- `url`：等同于 `file_path`，仅在上游返回的是真正可访问的 URL（非 data URI）时才保留为 URL。GPT image 等模型默认只返回 base64，因此通常会被 openPic-mcp 落盘为 `file_path`。
+
+无论入参选哪一种，openPic-mcp **都不会把 `response_format` 转发给上游 API**。社区已确认 GPT image models 在 `images/edits` 上传该字段会触发与“模型不支持”混淆的错误，因此 server 内部一律省略。
+
+#### `size` 与 `aspect_ratio`
+
+`size` 默认仅信任 OpenAI 官方 enum：`1024x1024`、`1024x1536`、`1536x1024`。`2048x2048` 仅在部分 OpenAI-Compatible 代理上可用，原生 OpenAI 不一定支持。
+
+为了避免直接面对像素值，可以使用 `aspect_ratio`：
+
+- `1:1` → `1024x1024`
+- `4:3` → `1536x1024`
+- `3:4` → `1024x1536`
+- `16:9` → `1536x1024`（最近的横向预设）
+- `9:16` → `1024x1536`（最近的纵向预设）
+- `auto` → 留空 size，由上游决定
+
+当 `size` 与 `aspect_ratio` 同时给出时，**`size` 优先**。
+
+#### `output_format`
+
+`output_format` 用于控制上游生成图片的编码格式（`png` / `jpeg` / `webp`），openPic-mcp 会原样转发到上游。该字段是可选的，留空则使用上游默认（通常为 `png`）。
+
+#### 502 / `upstream_error` 误读指南
+
+`OpenAI-Compatible` 图像上游可能把多种失败都包装为 `502 upstream_error`。常见情况包括：
+
+1. 上游服务临时不可用，可稍后重试。
+2. 请求参数与目标模型不兼容，例如不支持的 `size`、`response_format` 或模型路由。
+3. 图像编辑端点对输入图片本身触发内容审核，但上游没有返回明确的 moderation 错误。
+
+如果同一张图片在多个无害 prompt 下反复 edit 失败、而其他图片同时可以 edit 成功，可能是上游 image moderation 触发。客户端无法可靠区分该情况，建议停止重试并更换输入图片。openPic-mcp 不会自动重试 502/503/504，避免在不可恢复场景下扩大错误面。
+
 ### 图片生成与编辑耗时
 
 图片生成和编辑请求会等待上游 OpenAI-Compatible 服务完成推理后再返回。部分模型（例如高质量图片生成模型）单次 1K 图片可能需要约 1-2 分钟，2K 图片可能需要约 2-4 分钟。建议将 `OPENPIC_TIMEOUT` 保持为默认 `5m` 或按实际服务耗时调大，避免服务端在上游仍在推理时提前超时。

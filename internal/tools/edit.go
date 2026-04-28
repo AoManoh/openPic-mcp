@@ -29,12 +29,22 @@ var EditImageTool = types.Tool{
 			},
 			"size": {
 				Type:        "string",
-				Description: "Optional output image size. Defaults to 1024x1024.",
+				Description: "Optional output image size. Defaults to 1024x1024. Mutually exclusive with aspect_ratio: when both are provided, size wins.",
 				Enum:        supportedImageSizes,
+			},
+			"aspect_ratio": {
+				Type:        "string",
+				Description: "Optional aspect ratio. Mapped onto a supported size: 1:1=1024x1024, 4:3=1536x1024, 3:4=1024x1536, 16:9 and 9:16 use the nearest landscape/portrait preset, auto leaves the upstream default.",
+				Enum:        supportedAspectRatios,
 			},
 			"quality": {
 				Type:        "string",
 				Description: "Optional output quality supported by the configured provider.",
+			},
+			"output_format": {
+				Type:        "string",
+				Description: "Optional output image encoding forwarded to the upstream image API.",
+				Enum:        supportedOutputFormats,
 			},
 			"response_format": {
 				Type:        "string",
@@ -68,12 +78,16 @@ func EditImageHandler(imageProvider provider.ImageProvider) types.ToolHandler {
 			return errorResult(fmt.Sprintf("Failed to decode image: %v", err)), nil
 		}
 
-		size := stringArg(args, "size")
-		if size == "" {
-			size = defaultImageSize
+		// Phase 6b: share the size/aspect_ratio precedence resolver with
+		// generate_image so both tools surface identical validation errors.
+		size, err := resolveImageSize(stringArg(args, "size"), stringArg(args, "aspect_ratio"))
+		if err != nil {
+			return errorResult(err.Error()), nil
 		}
-		if !containsString(supportedImageSizes, size) {
-			return errorResult(fmt.Sprintf("unsupported size %q: expected one of %v", size, supportedImageSizes)), nil
+
+		outputFormat := stringArg(args, "output_format")
+		if err := validateOutputFormat(outputFormat); err != nil {
+			return errorResult(err.Error()), nil
 		}
 
 		responseFormat := stringArg(args, "response_format")
@@ -89,13 +103,15 @@ func EditImageHandler(imageProvider provider.ImageProvider) types.ToolHandler {
 			return errorResult(fmt.Sprintf("n=%d is not supported: this tool currently supports only n=1", n)), nil
 		}
 
+		// response_format is owned by the tool layer after Phase 2; provider
+		// requests carry only the domain-relevant fields.
 		req := &provider.EditImageRequest{
 			Image:          imageData,
 			ImageMediaType: imageMediaType,
 			Prompt:         prompt,
 			Size:           size,
 			Quality:        stringArg(args, "quality"),
-			ResponseFormat: providerResponseFormat(responseFormat),
+			OutputFormat:   outputFormat,
 			N:              n,
 		}
 
@@ -116,7 +132,7 @@ func EditImageHandler(imageProvider provider.ImageProvider) types.ToolHandler {
 			return errorResult("Failed to edit image: response contained no images"), nil
 		}
 
-		result, err := imageToolResult(resp.Images, resp.Created, responseFormat, "edit")
+		result, err := imageToolResult(imageResultsFromProvider(resp.Images), resp.Created, responseFormat, "edit")
 		if err != nil {
 			return errorResult(fmt.Sprintf("Failed to encode image editing result: %v", err)), nil
 		}
