@@ -9,17 +9,25 @@ import (
 	"strings"
 
 	imageutil "github.com/AoManoh/openPic-mcp/internal/image"
-	"github.com/AoManoh/openPic-mcp/internal/provider"
 	"github.com/AoManoh/openPic-mcp/pkg/types"
 )
 
+// imageToolResponse is the JSON payload the tool layer hands back to MCP
+// clients. It uses the tool-local ImageResult DTO (see result.go) so the
+// serialization shape is independent from the provider abstraction.
 type imageToolResponse struct {
-	Images  []provider.GeneratedImage `json:"images"`
-	Created int64                     `json:"created"`
+	Images  []ImageResult `json:"images"`
+	Created int64         `json:"created"`
 }
 
-func imageToolResult(images []provider.GeneratedImage, created int64, outputFormat string, filePrefix string) (*types.ToolCallResult, error) {
-	resultImages := make([]provider.GeneratedImage, len(images))
+// imageToolResult turns a slice of ImageResult values into a serialized
+// MCP tool-call result. Depending on outputFormat it either keeps inline
+// base64 (b64_json) or persists the bytes to a temp file and clears the
+// inline payload to avoid bloating MCP transcripts. URL fields that are
+// actually data URIs are cleared along with B64JSON whenever a file path
+// is produced, since both reproduce the same bytes.
+func imageToolResult(images []ImageResult, created int64, outputFormat string, filePrefix string) (*types.ToolCallResult, error) {
+	resultImages := make([]ImageResult, len(images))
 	copy(resultImages, images)
 
 	if outputFormat != "b64_json" {
@@ -59,7 +67,10 @@ func imageToolResult(images []provider.GeneratedImage, created int64, outputForm
 	}, nil
 }
 
-func saveInlineImageResult(image provider.GeneratedImage, filePrefix string) (string, error) {
+// saveInlineImageResult persists any inline payload referenced by the given
+// ImageResult to a temp file and returns the resulting absolute path.
+// Returns an empty path when the image only carries a non-data URL.
+func saveInlineImageResult(image ImageResult, filePrefix string) (string, error) {
 	if image.B64JSON != "" {
 		return saveBase64Image(image.B64JSON, filePrefix)
 	}
