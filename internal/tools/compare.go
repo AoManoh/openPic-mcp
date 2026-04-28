@@ -75,46 +75,16 @@ func CompareImagesHandler(visionProvider provider.VisionProvider) types.ToolHand
 				return errorResult(fmt.Sprintf("image at index %d must be a non-empty string", i)), nil
 			}
 
-			// Preprocess image input (handles local files, URLs, base64, data URIs)
-			var imageData string
-			var mediaType string
-
-			if image.IsLocalFilePath(imgStr) {
-				// Local file path - read and convert to base64
-				data, mimeType, err := encoder.DecodeInput(imgStr)
-				if err != nil {
-					return errorResult(fmt.Sprintf("Failed to read local file at index %d: %v", i, err)), nil
-				}
-				imageData = image.EncodeToBase64(data)
-				mediaType = mimeType
-			} else if image.IsDataURI(imgStr) {
-				// Data URI - extract base64 and media type
-				data, mimeType, err := encoder.DecodeInput(imgStr)
-				if err != nil {
-					return errorResult(fmt.Sprintf("Failed to decode data URI at index %d: %v", i, err)), nil
-				}
-				imageData = image.EncodeToBase64(data)
-				mediaType = mimeType
-			} else if image.IsURL(imgStr) {
-				// URL - pass directly to provider
-				imageData = imgStr
-				mediaType = ""
-			} else {
-				// Assume raw base64 - validate and detect format
-				data, mimeType, err := encoder.DecodeInput(imgStr)
-				if err != nil {
-					// If decoding fails, pass as-is
-					imageData = imgStr
-					mediaType = ""
-				} else {
-					imageData = image.EncodeToBase64(data)
-					mediaType = mimeType
-				}
+			// Normalize via the shared helper so each entry receives the same
+			// treatment as describe_image and other vision-style tools.
+			prepared, err := encoder.PrepareForVision(imgStr)
+			if err != nil {
+				return errorResult(fmt.Sprintf("Failed to prepare image at index %d: %v", i, err)), nil
 			}
 
 			images = append(images, provider.ImageInput{
-				Data:      imageData,
-				MediaType: mediaType,
+				Data:      prepared.Data,
+				MediaType: prepared.MediaType,
 			})
 		}
 
