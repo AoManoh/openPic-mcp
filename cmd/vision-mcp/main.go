@@ -35,22 +35,18 @@ func main() {
 	trans := transport.NewStdioTransport()
 	defer trans.Close()
 
-	// Create provider
-	provider := openai.NewProvider(cfg)
+	// Create provider. The same struct currently satisfies both the vision
+	// and image-generation interfaces; passing it twice keeps the seams
+	// explicit so a future deployment can plug different providers in for
+	// each capability without touching this entry point.
+	openaiProvider := openai.NewProvider(cfg)
 
-	// Create tool manager and register tools
+	// Create tool manager and register every tool exported by the tools
+	// package in a single call. See internal/tools/registry.go for the
+	// authoritative tool list.
 	toolManager := tool.NewManager()
-	if err := toolManager.Register(tools.DescribeImageTool, tools.DescribeImageHandler(provider)); err != nil {
-		log.Fatalf("Failed to register describe_image tool: %v", err)
-	}
-	if err := toolManager.Register(tools.CompareImagesTool, tools.CompareImagesHandler(provider)); err != nil {
-		log.Fatalf("Failed to register compare_images tool: %v", err)
-	}
-	if err := toolManager.Register(tools.GenerateImageTool, tools.GenerateImageHandler(provider)); err != nil {
-		log.Fatalf("Failed to register generate_image tool: %v", err)
-	}
-	if err := toolManager.Register(tools.EditImageTool, tools.EditImageHandler(provider)); err != nil {
-		log.Fatalf("Failed to register edit_image tool: %v", err)
+	if err := tools.RegisterAll(toolManager, openaiProvider, openaiProvider); err != nil {
+		log.Fatalf("Failed to register MCP tools: %v", err)
 	}
 
 	// Create MCP handler
