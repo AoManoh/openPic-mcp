@@ -149,6 +149,11 @@ docker run -it --rm \
 | `OPENPIC_REQUEST_TIMEOUT` | 否 | 0s（不限） | 单个 `tools/call` 的最大执行时间。`0s` 表示不超时；图片生成可能需要 1-4 分钟，缺省值正是为了不误杀 |
 | `OPENPIC_SHUTDOWN_TIMEOUT` | 否 | 30s | 收到 `SIGINT` / `SIGTERM` 后等待 in-flight `tools/call` 完成的预算；超时则 `engineCancel` 强制收尾。必须 > 0 |
 | `OPENPIC_LOG_FORMAT` | 否 | text | `text` 或 `json`。所有日志一律写 stderr，stdout 仅承载 MCP JSON-RPC 帧 |
+| `OPENPIC_TASK_STORE_ENABLED` | 否 | true | 异步任务工具集总开关。`false` 时 `submit_image_task` / `get_task_result` / `list_tasks` / `cancel_task` 不注册，且不构造 store/dispatcher |
+| `OPENPIC_TASK_DISK_PERSIST` | 否 | true | 是否把任务 manifest 落盘到 `<OPENPIC_OUTPUT_DIR>/tasks/`。`true` → DiskStore（启动期 fail-fast 校验目录可写）；`false` → MemoryStore，重启即丢 |
+| `OPENPIC_TASK_MAX_QUEUED` | 否 | 256 | store 中 queued 状态任务上限；硬上限 10000；满则 submit 返回 ErrQueueFull |
+| `OPENPIC_TASK_MAX_RETAINED` | 否 | 1024 | 终态任务保留窗口；硬上限 100000；超过时按 `finished_at` 升序淘汰最旧 |
+| `OPENPIC_TASK_TTL` | 否 | 24h | 终态保留时间（Go duration）。GC 按此清理过期任务；非法/零/负值在 Load 直接报错 |
 
 > **注意**：`OPENPIC_TIMEOUT` / `VISION_TIMEOUT` 必须使用 Go 的 duration 格式，例如：`30s`（30秒）、`2m`（2分钟）、`5m`（5分钟）。纯数字如 `120` 会导致解析错误。部分图片生成或编辑模型单次推理可能需要 1-4 分钟，不建议将该值设置得过低。
 >
@@ -327,6 +332,121 @@ openPic-mcp 内置了一个用 Go 写的 MCP 服务器引擎（`internal/server.
 - `server.shutdown_timeout_exceeded` / `server.shutdown_force_abandon`：停机预算被打穿，建议拉长 `OPENPIC_SHUTDOWN_TIMEOUT` 或排查长耗时工具。
 
 > **重要**：所有日志一律走 stderr。如果你看到日志混进 MCP 客户端的 JSON-RPC 通道，绝大概率是 `OPENPIC_LOG_FORMAT` 之外的代码路径误用了 `fmt.Println` 等写 stdout 的 API，请在仓库内 grep 修复后再上线。
+
+## 异步任务模型（C8 引入）
+
+为支持长耗时图片生成（90 秒 ~ 4 分钟），项目在不破坏现有同步工具的前提下，新增了一套异步 submit/get 工具集。AI 客户端可立即拿到 `task_id` 不阻塞会话，再按需轮询结果。
+
+### 架构
+
+```text
+client tools/call(submit_image_task)
+        │
+        ▼
+┌────────────────────────────────────┐
+│  internal/taskstore                │
+│  ├─ MemoryStore (in-RAM canonical) │
+│  └─ DiskStore  (RAM + JSON文件)    │── $OPENPIC_OUTPUT_DIR/tasks/<id>.json
+└────────────────────────────────────┘
+        │ store.Submit (queued)
+        ▼
+┌────────────────────────────────────┐
+│  internal/tools.Dispatcher         │
+│  ├─ 独立 worker pool（与 sync MCP   │
+│  │   的 worker pool 完全解耦）      │
+│  ├─ buffered queue（≥ MaxQueued）   │
+│  └─ 双登记 cancel（store + 自有 map）│
+└────────────────────────────────────┘
+        │ Transition queued → running
+        │ 调底层 generate_image / edit_image handler closure
+        │ Transition running → completed / failed / cancelled / abandoned
+        ▼
+client tools/call(get_task_result with wait=30s) → 终态 + Result.FilePath
+```
+
+> **关键决策**：异步任务的 worker pool **不复用** server 引擎的同步 worker pool。同步 `tools/list`、`describe_image` 等毫秒级请求绝不能被 90 秒级图片生成挤占槽位。两个 pool 独立调度，但共享 `OPENPIC_MAX_CONCURRENT_REQUESTS` 作为容量基线。
+
+### 状态机
+
+```text
+                    ┌──────► cancelled (cancel_task on queued)
+                    │
+queued ──► running ─┼──► completed
+                    ├──► failed
+                    ├──► cancelled (cancel_task on running)
+                    └──► abandoned (shutdown / restart 残留)
+
+queued ──► failed     (dispatcher queue full / 内部错误)
+queued ──► abandoned  (shutdown 时尚未派发)
+```
+
+非法迁移返回 `ErrIllegalTransition`，状态机原子化于 `sync.RWMutex` 写锁下执行。
+
+### 4 个工具
+
+| 工具 | 入参 | 返回 | 用途 |
+|------|------|------|------|
+| `submit_image_task` | `kind` (`generate_image`/`edit_image`) + `params`（与同步工具同 schema） | `{task_id, state, submitted_at}` | 立即返回，不阻塞会话 |
+| `get_task_result` | `task_id` + 可选 `wait`（Go duration，最大 5m） | 完整 `Task`（状态+结果+错误+时间戳） | `wait=0s` 立即快照；`wait>0` long-poll 至终态或超时 |
+| `list_tasks` | 可选 `states[]` / `kinds[]` / `since` (RFC3339) / `all` | `{tasks, count}` | 默认仅本进程任务；`all=true` 包含其他 PID 残留 |
+| `cancel_task` | `task_id` + 可选 `hint` | 取消后的 `Task` | 跨 PID 拒绝；终态任务返回当前快照不变 |
+
+### 调用示例
+
+```jsonc
+// 1. 提交一个生图任务，立即拿到 task_id
+{
+  "jsonrpc":"2.0","id":1,"method":"tools/call",
+  "params":{
+    "name":"submit_image_task",
+    "arguments":{
+      "kind":"generate_image",
+      "params":{"prompt":"a cat","size":"1024x1024","response_format":"file_path"}
+    }
+  }
+}
+// → {"task_id":"tsk_28341_2026...","state":"queued","submitted_at":"..."}
+
+// 2. 轮询（long-poll，最多 30 秒）
+{
+  "jsonrpc":"2.0","id":2,"method":"tools/call",
+  "params":{
+    "name":"get_task_result",
+    "arguments":{"task_id":"tsk_28341_2026...","wait":"30s"}
+  }
+}
+// → 终态 Task：state=completed, result.file_path=...
+
+// 3. 列出最近 1 小时的所有 running 任务
+{
+  "jsonrpc":"2.0","id":3,"method":"tools/call",
+  "params":{
+    "name":"list_tasks",
+    "arguments":{"states":["running"],"since":"2026-04-29T10:00:00Z"}
+  }
+}
+```
+
+### 持久化与重启行为
+
+- `OPENPIC_TASK_DISK_PERSIST=true`（默认）：每次状态迁移和淘汰都通过 `temp + fsync + rename` 原子写盘到 `<OPENPIC_OUTPUT_DIR>/tasks/<task_id>.json`。
+- 启动时扫描该目录，把 `queued` / `running` 状态的任务自动转 `abandoned`（hint=`process_restart`），让重启前正在跑的任务有确定结果，调用方决定是否重新提交。
+- 跨 PID 隔离：`list_tasks` 默认只返回本进程任务；`cancel_task` 跨 PID 拒绝，避免误改他人任务。
+- `OPENPIC_TASK_DISK_PERSIST=false`：纯内存模式，重启即丢，适合无写盘权限的容器或 ephemeral 环境。
+
+### 优雅停机
+
+shutdown 时引擎按以下顺序协同：
+
+1. recv loop 退出 → 不再接受新 MCP 请求。
+2. **`dispatcher.AbandonRunning("shutdown")`** —— 把所有 running 任务标 abandoned，取消其 ctx；任务 worker 通过 ctx.Done 立即返回。
+3. 关闭 sync MCP work queue → 排空已入队 `tools/call`。
+4. 等待 inflight WaitGroup（最长 `OPENPIC_SHUTDOWN_TIMEOUT`）。
+5. 关闭 transport。
+6. main 调 `dispatcher.Close()` 等任务 worker 全部退出。
+7. 调 `taskStore.Close()` 标记关闭。
+
+任务持久化让客户端在下次启动后还能 `get_task_result` 看到 `state=abandoned`，避免悬挂。
 
 ## API/工具说明
 
