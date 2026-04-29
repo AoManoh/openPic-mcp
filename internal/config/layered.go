@@ -154,6 +154,11 @@ func (c *LayeredConfig) BuildConfig() (*Config, error) {
 		RequestQueueSize:      clampPositiveInt(c.GetInt("OPENPIC_REQUEST_QUEUE_SIZE", DefaultRequestQueueSize), DefaultRequestQueueSize, RequestQueueSizeCap),
 		RequestTimeout:        c.GetDuration("OPENPIC_REQUEST_TIMEOUT", DefaultRequestTimeout),
 		ShutdownTimeout:       c.GetDuration("OPENPIC_SHUTDOWN_TIMEOUT", DefaultShutdownTimeout),
+		TaskStoreEnabled:      c.GetBool("OPENPIC_TASK_STORE_ENABLED", DefaultTaskStoreEnabled),
+		TaskDiskPersist:       c.GetBool("OPENPIC_TASK_DISK_PERSIST", DefaultTaskDiskPersist),
+		TaskMaxQueued:         clampPositiveInt(c.GetInt("OPENPIC_TASK_MAX_QUEUED", DefaultTaskMaxQueued), DefaultTaskMaxQueued, TaskMaxQueuedCap),
+		TaskMaxRetained:       clampPositiveInt(c.GetInt("OPENPIC_TASK_MAX_RETAINED", DefaultTaskMaxRetained), DefaultTaskMaxRetained, TaskMaxRetainedCap),
+		TaskTTL:               c.GetDuration("OPENPIC_TASK_TTL", DefaultTaskTTL),
 		Timeout:               ParseDuration(c.getFirst("OPENPIC_TIMEOUT", "VISION_TIMEOUT"), DefaultTimeout),
 		LogLevel:              c.GetString("OPENPIC_LOG_LEVEL", c.GetString("VISION_LOG_LEVEL", DefaultLogLevel)),
 		LogFormat:             c.GetString("OPENPIC_LOG_FORMAT", DefaultLogFormat),
@@ -182,6 +187,12 @@ func (c *LayeredConfig) BuildConfig() (*Config, error) {
 	// for env-driven configs that should fail loudly.
 	if cfg.LogFormat != "text" && cfg.LogFormat != "json" {
 		cfg.LogFormat = DefaultLogFormat
+	}
+	// TaskTTL must be strictly positive — a zero/negative value would
+	// disable terminal eviction entirely. Fall back to the default
+	// rather than failing validation here.
+	if cfg.TaskTTL <= 0 {
+		cfg.TaskTTL = DefaultTaskTTL
 	}
 
 	if err := cfg.Validate(); err != nil {

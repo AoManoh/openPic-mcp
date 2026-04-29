@@ -24,6 +24,15 @@ const (
 	DefaultRequestQueueSize      = 64
 	DefaultRequestTimeout        = 0 // 0 = no timeout; image generation can legitimately take 90s+.
 	DefaultShutdownTimeout       = 30 * time.Second
+
+	// Async task layer defaults. The store and dispatcher are enabled by
+	// default with disk persistence on; deployments that want pure-memory
+	// behaviour (e.g. ephemeral CI runs) flip OPENPIC_TASK_DISK_PERSIST=false.
+	DefaultTaskStoreEnabled = true
+	DefaultTaskDiskPersist  = true
+	DefaultTaskMaxQueued    = 256
+	DefaultTaskMaxRetained  = 1024
+	DefaultTaskTTL          = 24 * time.Hour
 )
 
 // Hard caps for engine tunables. Values above these are silently clamped
@@ -31,6 +40,8 @@ const (
 const (
 	MaxConcurrentRequestsCap = 100
 	RequestQueueSizeCap      = 10000
+	TaskMaxQueuedCap         = 10000
+	TaskMaxRetainedCap       = 100000
 )
 
 // Config holds the configuration for the Vision MCP Server.
@@ -60,6 +71,19 @@ type Config struct {
 	RequestQueueSize      int           // OPENPIC_REQUEST_QUEUE_SIZE
 	RequestTimeout        time.Duration // OPENPIC_REQUEST_TIMEOUT (0 = no timeout)
 	ShutdownTimeout       time.Duration // OPENPIC_SHUTDOWN_TIMEOUT
+
+	// Async task layer. TaskStoreEnabled is the master switch: when false
+	// the four async tools are not registered and no taskstore/dispatcher
+	// is constructed. TaskDiskPersist toggles disk-backed manifests under
+	// $OPENPIC_OUTPUT_DIR/tasks; when false the store is purely in-memory
+	// and tasks vanish on restart. The two int caps bound store population
+	// (queued + retained terminal); TaskTTL is the GC retention horizon
+	// for terminal tasks.
+	TaskStoreEnabled bool          // OPENPIC_TASK_STORE_ENABLED (default true)
+	TaskDiskPersist  bool          // OPENPIC_TASK_DISK_PERSIST  (default true)
+	TaskMaxQueued    int           // OPENPIC_TASK_MAX_QUEUED    (default 256)
+	TaskMaxRetained  int           // OPENPIC_TASK_MAX_RETAINED  (default 1024)
+	TaskTTL          time.Duration // OPENPIC_TASK_TTL           (default 24h)
 
 	// Optional fields
 	Timeout   time.Duration // OPENPIC_TIMEOUT or VISION_TIMEOUT (default: 5m)
@@ -104,6 +128,11 @@ func Load() (*Config, error) {
 		RequestQueueSize:      DefaultRequestQueueSize,
 		RequestTimeout:        DefaultRequestTimeout,
 		ShutdownTimeout:       DefaultShutdownTimeout,
+		TaskStoreEnabled:      DefaultTaskStoreEnabled,
+		TaskDiskPersist:       DefaultTaskDiskPersist,
+		TaskMaxQueued:         DefaultTaskMaxQueued,
+		TaskMaxRetained:       DefaultTaskMaxRetained,
+		TaskTTL:               DefaultTaskTTL,
 		Timeout:               DefaultTimeout,
 		LogLevel:              DefaultLogLevel,
 		LogFormat:             DefaultLogFormat,
@@ -192,6 +221,48 @@ func Load() (*Config, error) {
 			return nil, err
 		}
 		cfg.LogFormat = normalized
+	}
+
+	// Async task layer tunables. Same fail-loud-on-bad-input pattern as
+	// the engine knobs above; out-of-range values are clamped to the hard
+	// caps so a typo cannot accidentally provision a 10 million-slot heap.
+	if raw := os.Getenv("OPENPIC_TASK_STORE_ENABLED"); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid OPENPIC_TASK_STORE_ENABLED: %w", err)
+		}
+		cfg.TaskStoreEnabled = parsed
+	}
+	if raw := os.Getenv("OPENPIC_TASK_DISK_PERSIST"); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid OPENPIC_TASK_DISK_PERSIST: %w", err)
+		}
+		cfg.TaskDiskPersist = parsed
+	}
+	if raw := os.Getenv("OPENPIC_TASK_MAX_QUEUED"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid OPENPIC_TASK_MAX_QUEUED: %w", err)
+		}
+		cfg.TaskMaxQueued = clampPositiveInt(parsed, DefaultTaskMaxQueued, TaskMaxQueuedCap)
+	}
+	if raw := os.Getenv("OPENPIC_TASK_MAX_RETAINED"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid OPENPIC_TASK_MAX_RETAINED: %w", err)
+		}
+		cfg.TaskMaxRetained = clampPositiveInt(parsed, DefaultTaskMaxRetained, TaskMaxRetainedCap)
+	}
+	if raw := os.Getenv("OPENPIC_TASK_TTL"); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid OPENPIC_TASK_TTL: %w", err)
+		}
+		if parsed <= 0 {
+			return nil, fmt.Errorf("invalid OPENPIC_TASK_TTL: must be > 0")
+		}
+		cfg.TaskTTL = parsed
 	}
 
 	// Validate configuration

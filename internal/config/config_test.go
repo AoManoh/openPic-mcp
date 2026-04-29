@@ -23,6 +23,11 @@ func resetConfigEnv(t *testing.T) {
 		"OPENPIC_REQUEST_QUEUE_SIZE",
 		"OPENPIC_REQUEST_TIMEOUT",
 		"OPENPIC_SHUTDOWN_TIMEOUT",
+		"OPENPIC_TASK_STORE_ENABLED",
+		"OPENPIC_TASK_DISK_PERSIST",
+		"OPENPIC_TASK_MAX_QUEUED",
+		"OPENPIC_TASK_MAX_RETAINED",
+		"OPENPIC_TASK_TTL",
 		"VISION_API_BASE_URL",
 		"VISION_API_KEY",
 		"VISION_MODEL",
@@ -402,6 +407,144 @@ func TestLoad_ServerEngineZeroFallsBackToDefaults(t *testing.T) {
 	}
 	if cfg.RequestQueueSize != DefaultRequestQueueSize {
 		t.Errorf("RequestQueueSize = %d, want default %d", cfg.RequestQueueSize, DefaultRequestQueueSize)
+	}
+}
+
+func TestLoad_TaskStoreDefaults(t *testing.T) {
+	resetConfigEnv(t)
+	setRequiredImageEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.TaskStoreEnabled != DefaultTaskStoreEnabled {
+		t.Errorf("TaskStoreEnabled = %v, want %v", cfg.TaskStoreEnabled, DefaultTaskStoreEnabled)
+	}
+	if cfg.TaskDiskPersist != DefaultTaskDiskPersist {
+		t.Errorf("TaskDiskPersist = %v, want %v", cfg.TaskDiskPersist, DefaultTaskDiskPersist)
+	}
+	if cfg.TaskMaxQueued != DefaultTaskMaxQueued {
+		t.Errorf("TaskMaxQueued = %d, want %d", cfg.TaskMaxQueued, DefaultTaskMaxQueued)
+	}
+	if cfg.TaskMaxRetained != DefaultTaskMaxRetained {
+		t.Errorf("TaskMaxRetained = %d, want %d", cfg.TaskMaxRetained, DefaultTaskMaxRetained)
+	}
+	if cfg.TaskTTL != DefaultTaskTTL {
+		t.Errorf("TaskTTL = %s, want %s", cfg.TaskTTL, DefaultTaskTTL)
+	}
+}
+
+func TestLoad_TaskStoreOverrides(t *testing.T) {
+	resetConfigEnv(t)
+	setRequiredImageEnv(t)
+	t.Setenv("OPENPIC_TASK_STORE_ENABLED", "false")
+	t.Setenv("OPENPIC_TASK_DISK_PERSIST", "false")
+	t.Setenv("OPENPIC_TASK_MAX_QUEUED", "512")
+	t.Setenv("OPENPIC_TASK_MAX_RETAINED", "2048")
+	t.Setenv("OPENPIC_TASK_TTL", "12h")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.TaskStoreEnabled {
+		t.Error("TaskStoreEnabled should be false")
+	}
+	if cfg.TaskDiskPersist {
+		t.Error("TaskDiskPersist should be false")
+	}
+	if cfg.TaskMaxQueued != 512 {
+		t.Errorf("TaskMaxQueued = %d, want 512", cfg.TaskMaxQueued)
+	}
+	if cfg.TaskMaxRetained != 2048 {
+		t.Errorf("TaskMaxRetained = %d, want 2048", cfg.TaskMaxRetained)
+	}
+	if cfg.TaskTTL != 12*time.Hour {
+		t.Errorf("TaskTTL = %s, want 12h", cfg.TaskTTL)
+	}
+}
+
+func TestLoad_TaskStoreClampsCaps(t *testing.T) {
+	resetConfigEnv(t)
+	setRequiredImageEnv(t)
+	t.Setenv("OPENPIC_TASK_MAX_QUEUED", "999999")
+	t.Setenv("OPENPIC_TASK_MAX_RETAINED", "9999999")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.TaskMaxQueued != TaskMaxQueuedCap {
+		t.Errorf("TaskMaxQueued = %d, want cap %d", cfg.TaskMaxQueued, TaskMaxQueuedCap)
+	}
+	if cfg.TaskMaxRetained != TaskMaxRetainedCap {
+		t.Errorf("TaskMaxRetained = %d, want cap %d", cfg.TaskMaxRetained, TaskMaxRetainedCap)
+	}
+}
+
+func TestLoad_TaskStoreInvalidValues(t *testing.T) {
+	cases := []struct {
+		name   string
+		envVar string
+		value  string
+	}{
+		{"bool enabled", "OPENPIC_TASK_STORE_ENABLED", "maybe"},
+		{"bool persist", "OPENPIC_TASK_DISK_PERSIST", "yesplease"},
+		{"int queued", "OPENPIC_TASK_MAX_QUEUED", "abc"},
+		{"int retained", "OPENPIC_TASK_MAX_RETAINED", "xyz"},
+		{"duration ttl bad", "OPENPIC_TASK_TTL", "5banana"},
+		{"duration ttl zero", "OPENPIC_TASK_TTL", "0s"},
+		{"duration ttl negative", "OPENPIC_TASK_TTL", "-1h"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			resetConfigEnv(t)
+			setRequiredImageEnv(t)
+			t.Setenv(tt.envVar, tt.value)
+
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() expected error for %s=%q, got nil", tt.envVar, tt.value)
+			}
+		})
+	}
+}
+
+func TestLoad_TaskStoreZeroFallsBackToDefaults(t *testing.T) {
+	resetConfigEnv(t)
+	setRequiredImageEnv(t)
+	t.Setenv("OPENPIC_TASK_MAX_QUEUED", "0")
+	t.Setenv("OPENPIC_TASK_MAX_RETAINED", "0")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.TaskMaxQueued != DefaultTaskMaxQueued {
+		t.Errorf("TaskMaxQueued = %d, want default %d", cfg.TaskMaxQueued, DefaultTaskMaxQueued)
+	}
+	if cfg.TaskMaxRetained != DefaultTaskMaxRetained {
+		t.Errorf("TaskMaxRetained = %d, want default %d", cfg.TaskMaxRetained, DefaultTaskMaxRetained)
+	}
+}
+
+func TestBuildConfig_TaskStoreFallbacks(t *testing.T) {
+	// LayeredConfig path: BuildConfig is forgiving, so non-positive TTL
+	// from a file source (where Load's strict check doesn't run) should
+	// fall back to the default rather than fail validation.
+	lc := NewLayeredConfig()
+	lc.AddSource(PriorityRuntime, NewMapSource("test", map[string]string{
+		"OPENPIC_API_BASE_URL": "https://api.example.com/v1",
+		"OPENPIC_API_KEY":      "k",
+		"OPENPIC_VISION_MODEL": "m",
+		"OPENPIC_TASK_TTL":     "0s", // zero → fallback
+	}))
+	cfg, err := lc.BuildConfig()
+	if err != nil {
+		t.Fatalf("BuildConfig: %v", err)
+	}
+	if cfg.TaskTTL != DefaultTaskTTL {
+		t.Errorf("TaskTTL = %s, want default %s", cfg.TaskTTL, DefaultTaskTTL)
 	}
 }
 

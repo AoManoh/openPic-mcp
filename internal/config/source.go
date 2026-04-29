@@ -51,6 +51,11 @@ func NewDefaultSource() *DefaultSource {
 			"OPENPIC_REQUEST_TIMEOUT":          "0s",
 			"OPENPIC_SHUTDOWN_TIMEOUT":         "30s",
 			"OPENPIC_LOG_FORMAT":               "text",
+			"OPENPIC_TASK_STORE_ENABLED":       "true",
+			"OPENPIC_TASK_DISK_PERSIST":        "true",
+			"OPENPIC_TASK_MAX_QUEUED":          "256",
+			"OPENPIC_TASK_MAX_RETAINED":        "1024",
+			"OPENPIC_TASK_TTL":                 "24h",
 		},
 	}
 }
