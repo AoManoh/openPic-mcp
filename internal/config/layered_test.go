@@ -142,6 +142,82 @@ func TestLoadLayered(t *testing.T) {
 	}
 }
 
+func TestBuildConfig_ServerEngineRuntimeOverride(t *testing.T) {
+	t.Setenv("OPENPIC_API_BASE_URL", "https://api.test.com")
+	t.Setenv("OPENPIC_API_KEY", "test-key")
+	t.Setenv("OPENPIC_VISION_MODEL", "test-model")
+
+	lc, err := LoadLayered(map[string]string{
+		"OPENPIC_MAX_CONCURRENT_REQUESTS": "8",
+		"OPENPIC_REQUEST_QUEUE_SIZE":      "32",
+		"OPENPIC_REQUEST_TIMEOUT":         "45s",
+		"OPENPIC_SHUTDOWN_TIMEOUT":        "5s",
+		"OPENPIC_LOG_FORMAT":              "json",
+	})
+	if err != nil {
+		t.Fatalf("LoadLayered() err = %v", err)
+	}
+
+	cfg, err := lc.BuildConfig()
+	if err != nil {
+		t.Fatalf("BuildConfig() err = %v", err)
+	}
+	if cfg.MaxConcurrentRequests != 8 {
+		t.Errorf("MaxConcurrentRequests = %d, want 8", cfg.MaxConcurrentRequests)
+	}
+	if cfg.RequestQueueSize != 32 {
+		t.Errorf("RequestQueueSize = %d, want 32", cfg.RequestQueueSize)
+	}
+	if cfg.RequestTimeout != 45*time.Second {
+		t.Errorf("RequestTimeout = %v, want 45s", cfg.RequestTimeout)
+	}
+	if cfg.ShutdownTimeout != 5*time.Second {
+		t.Errorf("ShutdownTimeout = %v, want 5s", cfg.ShutdownTimeout)
+	}
+	if cfg.LogFormat != "json" {
+		t.Errorf("LogFormat = %q, want json", cfg.LogFormat)
+	}
+}
+
+func TestBuildConfig_ServerEngineRuntimeBadValuesFallBack(t *testing.T) {
+	t.Setenv("OPENPIC_API_BASE_URL", "https://api.test.com")
+	t.Setenv("OPENPIC_API_KEY", "test-key")
+	t.Setenv("OPENPIC_VISION_MODEL", "test-model")
+
+	// Layered loaders are forgiving by design — bad values must not crash
+	// startup, they fall back to safe defaults instead.
+	lc, err := LoadLayered(map[string]string{
+		"OPENPIC_MAX_CONCURRENT_REQUESTS": "0",
+		"OPENPIC_REQUEST_QUEUE_SIZE":      "-1",
+		"OPENPIC_REQUEST_TIMEOUT":         "-3s",
+		"OPENPIC_SHUTDOWN_TIMEOUT":        "0s",
+		"OPENPIC_LOG_FORMAT":              "yaml",
+	})
+	if err != nil {
+		t.Fatalf("LoadLayered() err = %v", err)
+	}
+
+	cfg, err := lc.BuildConfig()
+	if err != nil {
+		t.Fatalf("BuildConfig() err = %v", err)
+	}
+	if cfg.MaxConcurrentRequests != DefaultMaxConcurrentRequests {
+		t.Errorf("MaxConcurrentRequests = %d, want default %d", cfg.MaxConcurrentRequests, DefaultMaxConcurrentRequests)
+	}
+	if cfg.RequestQueueSize != DefaultRequestQueueSize {
+		t.Errorf("RequestQueueSize = %d, want default %d", cfg.RequestQueueSize, DefaultRequestQueueSize)
+	}
+	if cfg.RequestTimeout != DefaultRequestTimeout {
+		t.Errorf("RequestTimeout = %v, want default %v", cfg.RequestTimeout, DefaultRequestTimeout)
+	}
+	if cfg.ShutdownTimeout != DefaultShutdownTimeout {
+		t.Errorf("ShutdownTimeout = %v, want default %v", cfg.ShutdownTimeout, DefaultShutdownTimeout)
+	}
+	if cfg.LogFormat != DefaultLogFormat {
+		t.Errorf("LogFormat = %q, want default %q", cfg.LogFormat, DefaultLogFormat)
+	}
+}
+
 func TestLoadLayered_WithRuntimeOpts(t *testing.T) {
 	os.Setenv("VISION_API_BASE_URL", "https://env.test.com")
 	os.Setenv("VISION_API_KEY", "env-key")

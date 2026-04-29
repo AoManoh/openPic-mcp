@@ -14,10 +14,15 @@ func resetConfigEnv(t *testing.T) {
 		"OPENPIC_IMAGE_MODEL",
 		"OPENPIC_TIMEOUT",
 		"OPENPIC_LOG_LEVEL",
+		"OPENPIC_LOG_FORMAT",
 		"OPENPIC_OUTPUT_DIR",
 		"OPENPIC_FILENAME_PREFIX",
 		"OPENPIC_MAX_INLINE_PAYLOAD_BYTES",
 		"OPENPIC_OVERWRITE",
+		"OPENPIC_MAX_CONCURRENT_REQUESTS",
+		"OPENPIC_REQUEST_QUEUE_SIZE",
+		"OPENPIC_REQUEST_TIMEOUT",
+		"OPENPIC_SHUTDOWN_TIMEOUT",
 		"VISION_API_BASE_URL",
 		"VISION_API_KEY",
 		"VISION_MODEL",
@@ -278,6 +283,125 @@ func TestLoad_InvalidOverwrite(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want error for invalid OPENPIC_OVERWRITE")
+	}
+}
+
+func TestLoad_ServerEngineDefaults(t *testing.T) {
+	resetConfigEnv(t)
+	setRequiredImageEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.MaxConcurrentRequests != DefaultMaxConcurrentRequests {
+		t.Errorf("MaxConcurrentRequests = %d, want %d", cfg.MaxConcurrentRequests, DefaultMaxConcurrentRequests)
+	}
+	if cfg.RequestQueueSize != DefaultRequestQueueSize {
+		t.Errorf("RequestQueueSize = %d, want %d", cfg.RequestQueueSize, DefaultRequestQueueSize)
+	}
+	if cfg.RequestTimeout != DefaultRequestTimeout {
+		t.Errorf("RequestTimeout = %v, want %v", cfg.RequestTimeout, DefaultRequestTimeout)
+	}
+	if cfg.ShutdownTimeout != DefaultShutdownTimeout {
+		t.Errorf("ShutdownTimeout = %v, want %v", cfg.ShutdownTimeout, DefaultShutdownTimeout)
+	}
+	if cfg.LogFormat != DefaultLogFormat {
+		t.Errorf("LogFormat = %q, want %q", cfg.LogFormat, DefaultLogFormat)
+	}
+}
+
+func TestLoad_ServerEngineOverrides(t *testing.T) {
+	resetConfigEnv(t)
+	setRequiredImageEnv(t)
+	t.Setenv("OPENPIC_MAX_CONCURRENT_REQUESTS", "32")
+	t.Setenv("OPENPIC_REQUEST_QUEUE_SIZE", "128")
+	t.Setenv("OPENPIC_REQUEST_TIMEOUT", "90s")
+	t.Setenv("OPENPIC_SHUTDOWN_TIMEOUT", "10s")
+	t.Setenv("OPENPIC_LOG_FORMAT", "json")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.MaxConcurrentRequests != 32 {
+		t.Errorf("MaxConcurrentRequests = %d, want 32", cfg.MaxConcurrentRequests)
+	}
+	if cfg.RequestQueueSize != 128 {
+		t.Errorf("RequestQueueSize = %d, want 128", cfg.RequestQueueSize)
+	}
+	if cfg.RequestTimeout != 90*time.Second {
+		t.Errorf("RequestTimeout = %v, want 90s", cfg.RequestTimeout)
+	}
+	if cfg.ShutdownTimeout != 10*time.Second {
+		t.Errorf("ShutdownTimeout = %v, want 10s", cfg.ShutdownTimeout)
+	}
+	if cfg.LogFormat != "json" {
+		t.Errorf("LogFormat = %q, want json", cfg.LogFormat)
+	}
+}
+
+func TestLoad_ServerEngineClampsCaps(t *testing.T) {
+	resetConfigEnv(t)
+	setRequiredImageEnv(t)
+	t.Setenv("OPENPIC_MAX_CONCURRENT_REQUESTS", "1000000")
+	t.Setenv("OPENPIC_REQUEST_QUEUE_SIZE", "1000000")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.MaxConcurrentRequests != MaxConcurrentRequestsCap {
+		t.Errorf("MaxConcurrentRequests = %d, want clamp %d", cfg.MaxConcurrentRequests, MaxConcurrentRequestsCap)
+	}
+	if cfg.RequestQueueSize != RequestQueueSizeCap {
+		t.Errorf("RequestQueueSize = %d, want clamp %d", cfg.RequestQueueSize, RequestQueueSizeCap)
+	}
+}
+
+func TestLoad_ServerEngineRejectsInvalid(t *testing.T) {
+	cases := []struct {
+		name   string
+		envVar string
+		value  string
+	}{
+		{name: "non-numeric concurrent", envVar: "OPENPIC_MAX_CONCURRENT_REQUESTS", value: "many"},
+		{name: "non-numeric queue", envVar: "OPENPIC_REQUEST_QUEUE_SIZE", value: "lots"},
+		{name: "bad request timeout", envVar: "OPENPIC_REQUEST_TIMEOUT", value: "soon"},
+		{name: "negative request timeout", envVar: "OPENPIC_REQUEST_TIMEOUT", value: "-1s"},
+		{name: "bad shutdown timeout", envVar: "OPENPIC_SHUTDOWN_TIMEOUT", value: "later"},
+		{name: "zero shutdown timeout", envVar: "OPENPIC_SHUTDOWN_TIMEOUT", value: "0s"},
+		{name: "unknown log format", envVar: "OPENPIC_LOG_FORMAT", value: "yaml"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			resetConfigEnv(t)
+			setRequiredImageEnv(t)
+			t.Setenv(tt.envVar, tt.value)
+
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() error = nil, want error for %s=%q", tt.envVar, tt.value)
+			}
+		})
+	}
+}
+
+func TestLoad_ServerEngineZeroFallsBackToDefaults(t *testing.T) {
+	resetConfigEnv(t)
+	setRequiredImageEnv(t)
+	// "0" disables nothing — Load must still produce a runnable engine.
+	t.Setenv("OPENPIC_MAX_CONCURRENT_REQUESTS", "0")
+	t.Setenv("OPENPIC_REQUEST_QUEUE_SIZE", "0")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.MaxConcurrentRequests != DefaultMaxConcurrentRequests {
+		t.Errorf("MaxConcurrentRequests = %d, want default %d", cfg.MaxConcurrentRequests, DefaultMaxConcurrentRequests)
+	}
+	if cfg.RequestQueueSize != DefaultRequestQueueSize {
+		t.Errorf("RequestQueueSize = %d, want default %d", cfg.RequestQueueSize, DefaultRequestQueueSize)
 	}
 }
 

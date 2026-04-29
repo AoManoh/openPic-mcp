@@ -150,8 +150,13 @@ func (c *LayeredConfig) BuildConfig() (*Config, error) {
 		FilenamePrefix:        c.Get("OPENPIC_FILENAME_PREFIX"),
 		MaxInlinePayloadBytes: c.GetInt64("OPENPIC_MAX_INLINE_PAYLOAD_BYTES", DefaultMaxInlinePayloadBytes),
 		Overwrite:             c.GetBool("OPENPIC_OVERWRITE", DefaultOverwrite),
+		MaxConcurrentRequests: clampPositiveInt(c.GetInt("OPENPIC_MAX_CONCURRENT_REQUESTS", DefaultMaxConcurrentRequests), DefaultMaxConcurrentRequests, MaxConcurrentRequestsCap),
+		RequestQueueSize:      clampPositiveInt(c.GetInt("OPENPIC_REQUEST_QUEUE_SIZE", DefaultRequestQueueSize), DefaultRequestQueueSize, RequestQueueSizeCap),
+		RequestTimeout:        c.GetDuration("OPENPIC_REQUEST_TIMEOUT", DefaultRequestTimeout),
+		ShutdownTimeout:       c.GetDuration("OPENPIC_SHUTDOWN_TIMEOUT", DefaultShutdownTimeout),
 		Timeout:               ParseDuration(c.getFirst("OPENPIC_TIMEOUT", "VISION_TIMEOUT"), DefaultTimeout),
 		LogLevel:              c.GetString("OPENPIC_LOG_LEVEL", c.GetString("VISION_LOG_LEVEL", DefaultLogLevel)),
+		LogFormat:             c.GetString("OPENPIC_LOG_FORMAT", DefaultLogFormat),
 	}
 
 	// Treat non-positive overrides as a request for the default. This
@@ -159,6 +164,24 @@ func (c *LayeredConfig) BuildConfig() (*Config, error) {
 	// to disable it via 0 or a negative value still get a safe budget.
 	if cfg.MaxInlinePayloadBytes <= 0 {
 		cfg.MaxInlinePayloadBytes = DefaultMaxInlinePayloadBytes
+	}
+	// Negative request timeout is nonsensical; coerce to default of 0
+	// (= no timeout) so misconfigured layered sources still produce a
+	// runnable engine.
+	if cfg.RequestTimeout < 0 {
+		cfg.RequestTimeout = DefaultRequestTimeout
+	}
+	// Shutdown timeout must be strictly positive — a zero/negative value
+	// would skip the in-flight drain entirely. Fall back to the default
+	// rather than fail validation here so layered configs remain forgiving.
+	if cfg.ShutdownTimeout <= 0 {
+		cfg.ShutdownTimeout = DefaultShutdownTimeout
+	}
+	// Clamp log format to the supported set; unknown values fall back to
+	// text so a typo cannot crash startup. Hard validation lives in Load
+	// for env-driven configs that should fail loudly.
+	if cfg.LogFormat != "text" && cfg.LogFormat != "json" {
+		cfg.LogFormat = DefaultLogFormat
 	}
 
 	if err := cfg.Validate(); err != nil {

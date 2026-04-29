@@ -13,8 +13,24 @@ import (
 const (
 	DefaultTimeout               = 5 * time.Minute
 	DefaultLogLevel              = "info"
+	DefaultLogFormat             = "text"
 	DefaultMaxInlinePayloadBytes = 1 << 20 // 1 MiB; matches MCP client soft limits.
 	DefaultOverwrite             = false
+
+	// Server engine defaults. These mirror the constants in
+	// internal/server but live here so callers can tune them via
+	// environment variables without importing the server package.
+	DefaultMaxConcurrentRequests = 16
+	DefaultRequestQueueSize      = 64
+	DefaultRequestTimeout        = 0 // 0 = no timeout; image generation can legitimately take 90s+.
+	DefaultShutdownTimeout       = 30 * time.Second
+)
+
+// Hard caps for engine tunables. Values above these are silently clamped
+// during Load to avoid pathological configurations.
+const (
+	MaxConcurrentRequestsCap = 100
+	RequestQueueSizeCap      = 10000
 )
 
 // Config holds the configuration for the Vision MCP Server.
@@ -37,9 +53,18 @@ type Config struct {
 	MaxInlinePayloadBytes int64  // OPENPIC_MAX_INLINE_PAYLOAD_BYTES
 	Overwrite             bool   // OPENPIC_OVERWRITE
 
+	// Server engine tuning. Zero values fall back to the Default* constants
+	// above, ensuring an environment with no engine-related variables set
+	// still gets sensible production defaults.
+	MaxConcurrentRequests int           // OPENPIC_MAX_CONCURRENT_REQUESTS
+	RequestQueueSize      int           // OPENPIC_REQUEST_QUEUE_SIZE
+	RequestTimeout        time.Duration // OPENPIC_REQUEST_TIMEOUT (0 = no timeout)
+	ShutdownTimeout       time.Duration // OPENPIC_SHUTDOWN_TIMEOUT
+
 	// Optional fields
-	Timeout  time.Duration // OPENPIC_TIMEOUT or VISION_TIMEOUT (default: 5m)
-	LogLevel string        // VISION_LOG_LEVEL (default: info)
+	Timeout   time.Duration // OPENPIC_TIMEOUT or VISION_TIMEOUT (default: 5m)
+	LogLevel  string        // VISION_LOG_LEVEL (default: info)
+	LogFormat string        // OPENPIC_LOG_FORMAT (text|json, default: text)
 }
 
 // Validate checks if the configuration is valid.
@@ -75,8 +100,13 @@ func Load() (*Config, error) {
 		FilenamePrefix:        os.Getenv("OPENPIC_FILENAME_PREFIX"),
 		MaxInlinePayloadBytes: DefaultMaxInlinePayloadBytes,
 		Overwrite:             DefaultOverwrite,
+		MaxConcurrentRequests: DefaultMaxConcurrentRequests,
+		RequestQueueSize:      DefaultRequestQueueSize,
+		RequestTimeout:        DefaultRequestTimeout,
+		ShutdownTimeout:       DefaultShutdownTimeout,
 		Timeout:               DefaultTimeout,
 		LogLevel:              DefaultLogLevel,
+		LogFormat:             DefaultLogFormat,
 	}
 
 	// Parse optional timeout
@@ -118,12 +148,84 @@ func Load() (*Config, error) {
 		cfg.Overwrite = parsed
 	}
 
+	// Parse server engine tunables. Each follows the same pattern: empty
+	// → keep the default; invalid → surface the error so misconfigured
+	// deployments fail loudly at startup; out-of-range → clamp to the
+	// hard caps so a typo cannot accidentally provision 100 000 workers.
+	if raw := os.Getenv("OPENPIC_MAX_CONCURRENT_REQUESTS"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid OPENPIC_MAX_CONCURRENT_REQUESTS: %w", err)
+		}
+		cfg.MaxConcurrentRequests = clampPositiveInt(parsed, DefaultMaxConcurrentRequests, MaxConcurrentRequestsCap)
+	}
+	if raw := os.Getenv("OPENPIC_REQUEST_QUEUE_SIZE"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid OPENPIC_REQUEST_QUEUE_SIZE: %w", err)
+		}
+		cfg.RequestQueueSize = clampPositiveInt(parsed, DefaultRequestQueueSize, RequestQueueSizeCap)
+	}
+	if raw := os.Getenv("OPENPIC_REQUEST_TIMEOUT"); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid OPENPIC_REQUEST_TIMEOUT: %w", err)
+		}
+		if parsed < 0 {
+			return nil, fmt.Errorf("invalid OPENPIC_REQUEST_TIMEOUT: must be >= 0")
+		}
+		cfg.RequestTimeout = parsed
+	}
+	if raw := os.Getenv("OPENPIC_SHUTDOWN_TIMEOUT"); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid OPENPIC_SHUTDOWN_TIMEOUT: %w", err)
+		}
+		if parsed <= 0 {
+			return nil, fmt.Errorf("invalid OPENPIC_SHUTDOWN_TIMEOUT: must be > 0")
+		}
+		cfg.ShutdownTimeout = parsed
+	}
+	if raw := os.Getenv("OPENPIC_LOG_FORMAT"); raw != "" {
+		normalized, err := normalizeLogFormat(raw)
+		if err != nil {
+			return nil, err
+		}
+		cfg.LogFormat = normalized
+	}
+
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("configuration validation failed: %w", err)
 	}
 
 	return cfg, nil
+}
+
+// clampPositiveInt returns value when it lies within (0, cap]; otherwise
+// returns fallback. Zero/negative inputs always fall back to the default
+// so a misconfigured "0" cannot disable the engine entirely.
+func clampPositiveInt(value, fallback, cap int) int {
+	if value <= 0 {
+		return fallback
+	}
+	if cap > 0 && value > cap {
+		return cap
+	}
+	return value
+}
+
+// normalizeLogFormat returns the canonical form of a user-supplied log
+// format string. Only `text` and `json` are accepted; anything else is a
+// configuration error so deployments can't drift onto an unsupported
+// handler silently.
+func normalizeLogFormat(raw string) (string, error) {
+	switch raw {
+	case "text", "json":
+		return raw, nil
+	default:
+		return "", fmt.Errorf("invalid OPENPIC_LOG_FORMAT %q: expected 'text' or 'json'", raw)
+	}
 }
 
 func firstNonEmptyEnv(keys ...string) string {

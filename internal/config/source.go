@@ -46,6 +46,11 @@ func NewDefaultSource() *DefaultSource {
 			"VISION_ALLOWED_FORMATS":           "jpg,jpeg,png,gif,webp",
 			"OPENPIC_MAX_INLINE_PAYLOAD_BYTES": "1048576", // 1 MiB; matches DefaultMaxInlinePayloadBytes.
 			"OPENPIC_OVERWRITE":                "false",
+			"OPENPIC_MAX_CONCURRENT_REQUESTS":  "16",
+			"OPENPIC_REQUEST_QUEUE_SIZE":       "64",
+			"OPENPIC_REQUEST_TIMEOUT":          "0s",
+			"OPENPIC_SHUTDOWN_TIMEOUT":         "30s",
+			"OPENPIC_LOG_FORMAT":               "text",
 		},
 	}
 }
