@@ -31,9 +31,14 @@ func main() {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	// Create transport
-	trans := transport.NewStdioTransport()
-	defer trans.Close()
+	// Create transport. Connect synchronously while we still own the
+	// initialization context so a misbehaving stdio peer surfaces here
+	// instead of inside the receive loop.
+	conn, err := transport.NewStdio().Connect(context.Background())
+	if err != nil {
+		log.Fatalf("Failed to connect transport: %v", err)
+	}
+	defer conn.Close()
 
 	// Create provider. The same struct currently satisfies both the vision
 	// and image-generation interfaces; passing it twice keeps the seams
@@ -83,63 +88,61 @@ func main() {
 		cancel()
 	}()
 
-	// Main message loop
+	// Main message loop. The dispatch model is still serial in this commit;
+	// commit C4 introduces the dedicated server engine that turns this into
+	// a worker-pool driven loop.
 	log.Println("Vision MCP Server started")
-	if err := runMessageLoop(ctx, trans, mcpHandler); err != nil {
+	if err := runMessageLoop(ctx, conn, mcpHandler); err != nil {
 		log.Fatalf("Message loop error: %v", err)
 	}
 	log.Println("Vision MCP Server stopped")
 }
 
 // runMessageLoop runs the main message processing loop.
-func runMessageLoop(ctx context.Context, trans *transport.StdioTransport, handler *protocol.MCPHandler) error {
+//
+// It is intentionally minimal at this stage; concurrent dispatch and
+// graceful in-flight draining live in [server.Server] (introduced later in
+// the refactor series). Keeping this loop single-goroutine for now means
+// each commit in the series independently builds and ships a working
+// binary.
+func runMessageLoop(ctx context.Context, conn transport.Connection, handler *protocol.MCPHandler) error {
 	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-			// Read message
-			data, err := trans.Read()
-			if err != nil {
-				if errors.Is(err, io.EOF) {
-					return nil
-				}
-				// Check if context was cancelled
-				select {
-				case <-ctx.Done():
-					return nil
-				default:
-					return fmt.Errorf("failed to read message: %w", err)
-				}
+		// Read message; ctx cancellation propagates through the connection.
+		data, err := conn.Read(ctx)
+		if err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
+				return nil
 			}
+			return fmt.Errorf("failed to read message: %w", err)
+		}
 
-			// Skip empty messages
-			if len(data) == 0 {
-				continue
-			}
+		// Skip empty messages (defensive; the transport already filters
+		// pure-newline frames).
+		if len(data) == 0 {
+			continue
+		}
 
-			// Handle message
-			resp, err := handler.HandleMessage(data)
-			if err != nil {
-				log.Printf("Error handling message: %v", err)
-				continue
-			}
+		// Handle message.
+		resp, err := handler.HandleMessage(data)
+		if err != nil {
+			log.Printf("Error handling message: %v", err)
+			continue
+		}
 
-			// Skip if no response (e.g., for notifications)
-			if resp == nil {
-				continue
-			}
+		// Skip if no response (e.g., for notifications).
+		if resp == nil {
+			continue
+		}
 
-			// Encode and send response
-			respData, err := protocol.EncodeResponse(resp)
-			if err != nil {
-				log.Printf("Error encoding response: %v", err)
-				continue
-			}
+		// Encode and send response.
+		respData, err := protocol.EncodeResponse(resp)
+		if err != nil {
+			log.Printf("Error encoding response: %v", err)
+			continue
+		}
 
-			if err := trans.Write(respData); err != nil {
-				log.Printf("Error writing response: %v", err)
-			}
+		if err := conn.Write(ctx, respData); err != nil {
+			log.Printf("Error writing response: %v", err)
 		}
 	}
 }

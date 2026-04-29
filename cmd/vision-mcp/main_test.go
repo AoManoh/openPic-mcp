@@ -148,10 +148,14 @@ func TestStdioTransportIntegration(t *testing.T) {
 	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}` + "\n")
 	output := &bytes.Buffer{}
 
-	trans := transport.NewStdioTransportWithIO(input, output)
+	conn, err := transport.NewStdioWithIO(input, output).Connect(context.Background())
+	if err != nil {
+		t.Fatalf("Connect error: %v", err)
+	}
+	defer conn.Close()
 
 	// Read message
-	data, err := trans.Read()
+	data, err := conn.Read(context.Background())
 	if err != nil {
 		t.Fatalf("Read error: %v", err)
 	}
@@ -169,7 +173,7 @@ func TestStdioTransportIntegration(t *testing.T) {
 	// Write response
 	resp := protocol.NewSuccessResponse(req.ID, map[string]string{"status": "ok"})
 	respData, _ := protocol.EncodeResponse(resp)
-	if err := trans.Write(respData); err != nil {
+	if err := conn.Write(context.Background(), respData); err != nil {
 		t.Fatalf("Write error: %v", err)
 	}
 
@@ -183,9 +187,13 @@ func TestRunMessageLoopReturnsNilOnEOF(t *testing.T) {
 	handler, _ := setupTestServer()
 	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`)
 	output := &bytes.Buffer{}
-	trans := transport.NewStdioTransportWithIO(input, output)
+	conn, err := transport.NewStdioWithIO(input, output).Connect(context.Background())
+	if err != nil {
+		t.Fatalf("Connect error: %v", err)
+	}
+	defer conn.Close()
 
-	if err := runMessageLoop(context.Background(), trans, handler); err != nil {
+	if err := runMessageLoop(context.Background(), conn, handler); err != nil {
 		t.Fatalf("runMessageLoop() error = %v, want nil", err)
 	}
 	if !strings.Contains(output.String(), "protocolVersion") {
