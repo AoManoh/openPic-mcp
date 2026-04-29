@@ -76,6 +76,28 @@ type CancelRegistry interface {
 	Done(id any)
 }
 
+// AbandonHook is the narrow lifecycle contract the engine uses to
+// coordinate with async task execution during graceful shutdown.
+//
+// AbandonRunning is invoked exactly once per [Server.Run], before the
+// engine begins waiting for in-flight sync workers to drain. The hook
+// is expected to mark every task currently in StateRunning (as far as
+// the implementer's task store is concerned) as StateAbandoned with the
+// supplied reason and cancel any handler ctx the implementer has tracked.
+//
+// The broader dispatcher type (with Dispatch and worker pool ownership)
+// lives in the tools/async package; the engine intentionally narrows
+// the contract to AbandonRunning so this package stays free of
+// task-store dependencies and so test stubs can be one-method literal
+// implementations.
+//
+// AbandonRunning MUST be safe to call concurrently with Dispatch on the
+// implementer side; the engine itself only calls it from a single
+// goroutine ([Server.Run]).
+type AbandonHook interface {
+	AbandonRunning(reason string)
+}
+
 // Config tunes the engine. All fields are optional; zero values fall back
 // to the Default* constants above.
 type Config struct {
@@ -124,6 +146,22 @@ func WithCancelRegistry(r CancelRegistry) Option {
 	}
 }
 
+// WithAbandonHook wires the lifecycle hook the engine calls during
+// graceful shutdown to abandon in-flight async tasks. Passing nil is a
+// no-op so callers running with the async layer disabled can pipe an
+// optional dependency straight through.
+//
+// The engine takes no responsibility for the dispatcher's own lifecycle:
+// callers must drain/close their dispatcher AFTER [Server.Run] returns
+// if they need to wait for task workers to settle.
+func WithAbandonHook(h AbandonHook) Option {
+	return func(s *Server) {
+		if h != nil {
+			s.abandon = h
+		}
+	}
+}
+
 // Server is the engine. It is constructed once via [New] and driven by
 // [Server.Run]. It is not safe to call Run concurrently; the engine
 // expects a single owner goroutine.
@@ -131,6 +169,7 @@ type Server struct {
 	transport transport.Transport
 	handler   Handler
 	cancels   CancelRegistry
+	abandon   AbandonHook
 	cfg       Config
 	logger    *slog.Logger
 
@@ -256,6 +295,18 @@ func (s *Server) Run(ctx context.Context) error {
 	// open here so in-flight workers can still flush their responses;
 	// closing it before in-flight drains would silently drop replies.
 	s.shutdown.Store(true)
+
+	// Tell the async task layer to abandon its in-flight work BEFORE we
+	// close the sync MCP queue. The two pools are independent, so doing
+	// this early lets task workers observe StateAbandoned + ctx
+	// cancellation while sync MCP workers are still draining in
+	// parallel. The hook itself is fast (store mutations only); waiting
+	// for task workers to actually exit is the caller's responsibility
+	// after Run returns (typically via dispatcher.Close()).
+	if s.abandon != nil {
+		safeAbandon(s.logger, s.abandon)
+	}
+
 	close(s.workQueue)
 
 	// Wait for in-flight to settle. If they exceed the budget, fire the
@@ -510,6 +561,21 @@ func peekMethodAndID(raw []byte) (string, any) {
 	}
 	_ = json.Unmarshal(raw, &hdr)
 	return hdr.Method, hdr.ID
+}
+
+// safeAbandon invokes the AbandonHook with panic isolation. A buggy
+// dispatcher must never be allowed to bring down the shutdown path; if
+// it panics we log the recovery and proceed with the rest of the
+// graceful sequence. The hook is best-effort by contract.
+func safeAbandon(log *slog.Logger, h AbandonHook) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Error("server.abandon_hook_panic",
+				"recovered", fmt.Sprintf("%v", rec),
+			)
+		}
+	}()
+	h.AbandonRunning("shutdown")
 }
 
 func normalizeConfig(c Config) Config {
