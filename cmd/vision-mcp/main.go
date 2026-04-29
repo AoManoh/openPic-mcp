@@ -122,8 +122,9 @@ func runMessageLoop(ctx context.Context, conn transport.Connection, handler *pro
 			continue
 		}
 
-		// Handle message.
-		resp, err := handler.HandleMessage(data)
+		// Handle message. ctx propagates from the receive loop down so a
+		// shutdown signal interrupts in-flight work.
+		resp, err := handler.HandleMessage(ctx, data)
 		if err != nil {
 			log.Printf("Error handling message: %v", err)
 			continue
@@ -149,7 +150,7 @@ func runMessageLoop(ctx context.Context, conn transport.Connection, handler *pro
 
 // createToolsListHandler creates a handler for tools/list requests.
 func createToolsListHandler(tm *tool.Manager) protocol.Handler {
-	return func(req *types.JSONRPCRequest) (*types.JSONRPCResponse, error) {
+	return func(_ context.Context, req *types.JSONRPCRequest) (*types.JSONRPCResponse, error) {
 		result := types.ToolsListResult{
 			Tools: tm.List(),
 		}
@@ -158,8 +159,13 @@ func createToolsListHandler(tm *tool.Manager) protocol.Handler {
 }
 
 // createToolsCallHandler creates a handler for tools/call requests.
+//
+// ctx is the per-request context the protocol/server layer derived for this
+// call. It must reach Manager.Execute so that ctx-aware tools can interrupt
+// upstream HTTP work when the engine cancels (shutdown) or the client sends
+// a `notifications/cancelled`.
 func createToolsCallHandler(tm *tool.Manager) protocol.Handler {
-	return func(req *types.JSONRPCRequest) (*types.JSONRPCResponse, error) {
+	return func(ctx context.Context, req *types.JSONRPCRequest) (*types.JSONRPCResponse, error) {
 		// Parse parameters
 		params, err := protocol.ParseToolCallParams(req)
 		if err != nil {
@@ -167,7 +173,7 @@ func createToolsCallHandler(tm *tool.Manager) protocol.Handler {
 		}
 
 		// Execute tool
-		result, err := tm.Execute(context.Background(), params.Name, params.Arguments)
+		result, err := tm.Execute(ctx, params.Name, params.Arguments)
 		if err != nil {
 			return protocol.NewToolExecutionError(req.ID, err.Error()), nil
 		}

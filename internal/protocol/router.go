@@ -1,13 +1,19 @@
 package protocol
 
 import (
+	"context"
 	"sync"
 
 	"github.com/AoManoh/openPic-mcp/pkg/types"
 )
 
 // Handler is the function signature for message handlers.
-type Handler func(*types.JSONRPCRequest) (*types.JSONRPCResponse, error)
+//
+// Handlers receive a per-request ctx that propagates from the server engine
+// down through the tool layer to the upstream HTTP call. Handlers are
+// expected to honour ctx cancellation promptly so MCP `notifications/cancelled`
+// and engine shutdown can interrupt long-running work.
+type Handler func(ctx context.Context, req *types.JSONRPCRequest) (*types.JSONRPCResponse, error)
 
 // Router routes JSON-RPC requests to their handlers.
 type Router struct {
@@ -37,7 +43,7 @@ func (r *Router) Unregister(method string) {
 }
 
 // Route routes a request to its handler.
-func (r *Router) Route(req *types.JSONRPCRequest) (*types.JSONRPCResponse, error) {
+func (r *Router) Route(ctx context.Context, req *types.JSONRPCRequest) (*types.JSONRPCResponse, error) {
 	r.mu.RLock()
 	handler, ok := r.handlers[req.Method]
 	r.mu.RUnlock()
@@ -46,7 +52,7 @@ func (r *Router) Route(req *types.JSONRPCRequest) (*types.JSONRPCResponse, error
 		return NewMethodNotFoundError(req.ID, req.Method), nil
 	}
 
-	return handler(req)
+	return handler(ctx, req)
 }
 
 // HasHandler checks if a handler is registered for a method.

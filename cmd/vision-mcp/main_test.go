@@ -42,18 +42,18 @@ func setupTestServer() (*protocol.MCPHandler, *tool.Manager) {
 
 	// Register tools handlers
 	mcpHandler.RegisterToolsHandlers(
-		func(req *types.JSONRPCRequest) (*types.JSONRPCResponse, error) {
+		func(_ context.Context, req *types.JSONRPCRequest) (*types.JSONRPCResponse, error) {
 			result := types.ToolsListResult{
 				Tools: toolManager.List(),
 			}
 			return protocol.NewSuccessResponse(req.ID, result), nil
 		},
-		func(req *types.JSONRPCRequest) (*types.JSONRPCResponse, error) {
+		func(ctx context.Context, req *types.JSONRPCRequest) (*types.JSONRPCResponse, error) {
 			params, err := protocol.ParseToolCallParams(req)
 			if err != nil {
 				return protocol.NewInvalidParamsError(req.ID, err.Error()), nil
 			}
-			result, err := toolManager.Execute(nil, params.Name, params.Arguments)
+			result, err := toolManager.Execute(ctx, params.Name, params.Arguments)
 			if err != nil {
 				return protocol.NewToolExecutionError(req.ID, err.Error()), nil
 			}
@@ -70,7 +70,7 @@ func TestInitializeRequest(t *testing.T) {
 	// Create initialize request
 	req := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`
 
-	resp, err := handler.HandleMessage([]byte(req))
+	resp, err := handler.HandleMessage(context.Background(), []byte(req))
 	if err != nil {
 		t.Fatalf("HandleMessage error: %v", err)
 	}
@@ -103,15 +103,15 @@ func TestToolsListRequest(t *testing.T) {
 
 	// First initialize
 	initReq := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`
-	handler.HandleMessage([]byte(initReq))
+	handler.HandleMessage(context.Background(), []byte(initReq))
 
 	// Send initialized notification
 	initedReq := `{"jsonrpc":"2.0","method":"notifications/initialized"}`
-	handler.HandleMessage([]byte(initedReq))
+	handler.HandleMessage(context.Background(), []byte(initedReq))
 
 	// Now test tools/list
 	req := `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`
-	resp, err := handler.HandleMessage([]byte(req))
+	resp, err := handler.HandleMessage(context.Background(), []byte(req))
 	if err != nil {
 		t.Fatalf("HandleMessage error: %v", err)
 	}
@@ -206,13 +206,13 @@ func TestMethodNotFoundError(t *testing.T) {
 
 	// Initialize first
 	initReq := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`
-	handler.HandleMessage([]byte(initReq))
+	handler.HandleMessage(context.Background(), []byte(initReq))
 	initedReq := `{"jsonrpc":"2.0","method":"notifications/initialized"}`
-	handler.HandleMessage([]byte(initedReq))
+	handler.HandleMessage(context.Background(), []byte(initedReq))
 
 	// Test unknown method
 	req := `{"jsonrpc":"2.0","id":2,"method":"unknown/method","params":{}}`
-	resp, err := handler.HandleMessage([]byte(req))
+	resp, err := handler.HandleMessage(context.Background(), []byte(req))
 	if err != nil {
 		t.Fatalf("HandleMessage error: %v", err)
 	}
