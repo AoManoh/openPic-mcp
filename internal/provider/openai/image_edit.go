@@ -106,6 +106,7 @@ func (p *Provider) EditImage(ctx context.Context, req *provider.EditImageRequest
 	return &provider.EditImageResponse{
 		Images:  images,
 		Created: imageResp.Created,
+		Usage:   convertImageUsage(imageResp.Usage),
 	}, nil
 }
 

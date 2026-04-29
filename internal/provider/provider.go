@@ -109,6 +109,7 @@ type GenerateImageRequest struct {
 type GenerateImageResponse struct {
 	Images  []GeneratedImage `json:"images"`
 	Created int64            `json:"created"`
+	Usage   *ImageUsage      `json:"usage,omitempty"`
 }
 
 type GeneratedImage struct {
@@ -116,6 +117,20 @@ type GeneratedImage struct {
 	B64JSON       string `json:"b64_json,omitempty"`
 	FilePath      string `json:"file_path,omitempty"`
 	RevisedPrompt string `json:"revised_prompt,omitempty"`
+}
+
+// ImageUsage carries optional token-usage figures returned by image
+// generation / edit endpoints. All fields are pointers so callers can
+// distinguish "not reported" from "zero": some OpenAI-compatible
+// deployments only return a subset of the breakdown, and we never want
+// to fabricate values the upstream did not provide. The shape is kept
+// distinct from the chat-completions Usage struct above because the
+// image API uses input_tokens/output_tokens/total_tokens semantics
+// rather than prompt_tokens/completion_tokens.
+type ImageUsage struct {
+	InputTokens  *int64 `json:"input_tokens,omitempty"`
+	OutputTokens *int64 `json:"output_tokens,omitempty"`
+	TotalTokens  *int64 `json:"total_tokens,omitempty"`
 }
 
 // EditImageRequest is the domain-level request used by tool handlers.
@@ -140,6 +155,7 @@ type EditImageRequest struct {
 type EditImageResponse struct {
 	Images  []GeneratedImage `json:"images"`
 	Created int64            `json:"created"`
+	Usage   *ImageUsage      `json:"usage,omitempty"`
 }
 
 // DefaultPrompts contains default prompts for different analysis types.

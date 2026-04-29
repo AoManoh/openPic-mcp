@@ -19,7 +19,7 @@ func TestImageToolResult_FormatMismatchAddsWarningAndKeepsRealFormat(t *testing.
 		{B64JSON: onePixelPNGBase64},
 	}
 
-	result, err := imageToolResult(images, 100, defaultImageResponseFormat, "webp", "test-mismatch")
+	result, err := imageToolResult(images, 100, defaultImageResponseFormat, "webp", outputPathPolicy{Prefix: "test-mismatch"}, nil, nil, nil, 0)
 	if err != nil {
 		t.Fatalf("imageToolResult returned error: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestImageToolResult_FormatMatch_NoWarning(t *testing.T) {
 		{B64JSON: onePixelPNGBase64},
 	}
 
-	result, err := imageToolResult(images, 100, defaultImageResponseFormat, "png", "test-match")
+	result, err := imageToolResult(images, 100, defaultImageResponseFormat, "png", outputPathPolicy{Prefix: "test-match"}, nil, nil, nil, 0)
 	if err != nil {
 		t.Fatalf("imageToolResult returned error: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestImageToolResult_NoRequestedOutputFormat_NoWarning(t *testing.T) {
 		{B64JSON: onePixelPNGBase64},
 	}
 
-	result, err := imageToolResult(images, 100, defaultImageResponseFormat, "", "test-blank")
+	result, err := imageToolResult(images, 100, defaultImageResponseFormat, "", outputPathPolicy{Prefix: "test-blank"}, nil, nil, nil, 0)
 	if err != nil {
 		t.Fatalf("imageToolResult returned error: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestImageToolResult_B64JSON_PopulatesFormatWithoutPersisting(t *testing.T) 
 		{B64JSON: onePixelPNGBase64},
 	}
 
-	result, err := imageToolResult(images, 100, "b64_json", "", "test-b64")
+	result, err := imageToolResult(images, 100, "b64_json", "", outputPathPolicy{Prefix: "test-b64"}, nil, nil, nil, 0)
 	if err != nil {
 		t.Fatalf("imageToolResult returned error: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestImageToolResult_B64JSONMismatchWarningDoesNotClaimFileSaved(t *testing.
 		{B64JSON: onePixelPNGBase64},
 	}
 
-	result, err := imageToolResult(images, 100, "b64_json", "webp", "test-b64-mismatch")
+	result, err := imageToolResult(images, 100, "b64_json", "webp", outputPathPolicy{Prefix: "test-b64-mismatch"}, nil, nil, nil, 0)
 	if err != nil {
 		t.Fatalf("imageToolResult returned error: %v", err)
 	}

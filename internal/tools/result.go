@@ -42,3 +42,21 @@ func imageResultsFromProvider(items []provider.GeneratedImage) []ImageResult {
 	}
 	return out
 }
+
+// usageFromProvider adapts the provider-level ImageUsage to the
+// tool-layer UsageInfo carried in the MCP response. Returns nil when no
+// fields are populated so the response payload can omit the section
+// entirely rather than emitting a struct of nil pointers.
+func usageFromProvider(in *provider.ImageUsage) *UsageInfo {
+	if in == nil {
+		return nil
+	}
+	if in.InputTokens == nil && in.OutputTokens == nil && in.TotalTokens == nil {
+		return nil
+	}
+	return &UsageInfo{
+		InputTokens:  in.InputTokens,
+		OutputTokens: in.OutputTokens,
+		TotalTokens:  in.TotalTokens,
+	}
+}

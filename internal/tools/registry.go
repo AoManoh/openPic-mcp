@@ -26,7 +26,13 @@ type toolBinding struct {
 // enumerated: cmd/vision-mcp/main.go calls it once during boot, future
 // transports (e.g. Streamable HTTP) can reuse it unchanged, and adding a
 // new tool only requires extending the slice below.
-func RegisterAll(manager *tool.Manager, vp provider.VisionProvider, ip provider.ImageProvider) error {
+//
+// The variadic imageOpts are forwarded only to the image-producing
+// handlers (generate_image, edit_image). describe_image and
+// compare_images do not persist images so they ignore output-path
+// options. Passing no options preserves the pre-P1 behaviour: writes go
+// to os.TempDir()/openpic-mcp/ with a randomised name.
+func RegisterAll(manager *tool.Manager, vp provider.VisionProvider, ip provider.ImageProvider, imageOpts ...HandlerOption) error {
 	if manager == nil {
 		return fmt.Errorf("tool manager is required")
 	}
@@ -40,8 +46,8 @@ func RegisterAll(manager *tool.Manager, vp provider.VisionProvider, ip provider.
 	bindings := []toolBinding{
 		{def: DescribeImageTool, handler: DescribeImageHandler(vp)},
 		{def: CompareImagesTool, handler: CompareImagesHandler(vp)},
-		{def: GenerateImageTool, handler: GenerateImageHandler(ip)},
-		{def: EditImageTool, handler: EditImageHandler(ip)},
+		{def: GenerateImageTool, handler: GenerateImageHandler(ip, imageOpts...)},
+		{def: EditImageTool, handler: EditImageHandler(ip, imageOpts...)},
 		{def: ListImageCapabilitiesTool, handler: ListImageCapabilitiesHandler()},
 	}
 

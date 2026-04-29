@@ -56,12 +56,31 @@ var GenerateImageTool = types.Tool{
 				Description: "Optional number of images to generate. Currently only n=1 is supported.",
 				Default:     "1",
 			},
+			"output_dir": {
+				Type:        "string",
+				Description: "Optional absolute directory where saved images should be written. Overrides OPENPIC_OUTPUT_DIR for this call. Must be an absolute path with no '..' segments; ignored when response_format=b64_json.",
+			},
+			"filename_prefix": {
+				Type:        "string",
+				Description: "Optional filename prefix used when saving images. Limited to [A-Za-z0-9._-] and 32 characters; cannot start with '.'. Falls back to OPENPIC_FILENAME_PREFIX or 'generate' when omitted.",
+			},
+			"overwrite": {
+				Type:        "boolean",
+				Description: "Optional overwrite policy for saved files. When false (the default) collisions cause a numeric suffix to be appended; when true existing files are replaced.",
+			},
 		},
 		Required: []string{"prompt"},
 	},
 }
 
-func GenerateImageHandler(imageProvider provider.ImageProvider) types.ToolHandler {
+// GenerateImageHandler returns the MCP tool handler for generate_image.
+// The variadic HandlerOption arguments let main.go thread the
+// deployment-level output-path policy (derived from config.Config) into
+// the closure without changing existing call sites that don't care; the
+// handler defaults to the legacy temp directory when no options are
+// supplied.
+func GenerateImageHandler(imageProvider provider.ImageProvider, opts ...HandlerOption) types.ToolHandler {
+	handlerOpts := applyImageHandlerOptions(opts)
 	return func(ctx context.Context, args map[string]any) (*types.ToolCallResult, error) {
 		prompt, ok := args["prompt"].(string)
 		if !ok || prompt == "" {
@@ -94,6 +113,21 @@ func GenerateImageHandler(imageProvider provider.ImageProvider) types.ToolHandle
 			return errorResult(fmt.Sprintf("n=%d is not supported: this tool currently supports only n=1", n)), nil
 		}
 
+		overwriteOverride, err := parseBoolArg(args, "overwrite")
+		if err != nil {
+			return errorResult(err.Error()), nil
+		}
+		policy, err := resolveOutputPolicy(
+			stringArg(args, "output_dir"),
+			stringArg(args, "filename_prefix"),
+			overwriteOverride,
+			"generate",
+			handlerOpts.fallbackPolicy(),
+		)
+		if err != nil {
+			return errorResult(err.Error()), nil
+		}
+
 		// response_format is purely an MCP-side delivery hint after Phase 2.
 		// The provider decides whether to forward anything to the upstream
 		// API; the tool layer below decides how to wrap the response (b64
@@ -114,7 +148,24 @@ func GenerateImageHandler(imageProvider provider.ImageProvider) types.ToolHandle
 			return errorResult("Failed to generate image: response contained no images"), nil
 		}
 
-		result, err := imageToolResult(imageResultsFromProvider(resp.Images), resp.Created, responseFormat, outputFormat, "generate")
+		requested := buildRequestedFromArgs(args, prompt, n, responseFormat, overwriteOverride)
+		applied := buildAppliedFromRequest(appliedRequestView{
+			Size:         req.Size,
+			Quality:      req.Quality,
+			OutputFormat: req.OutputFormat,
+			N:            req.N,
+		}, responseFormat, policy)
+		result, err := imageToolResult(
+			imageResultsFromProvider(resp.Images),
+			resp.Created,
+			responseFormat,
+			outputFormat,
+			policy,
+			requested,
+			applied,
+			usageFromProvider(resp.Usage),
+			handlerOpts.MaxInlinePayloadBytes,
+		)
 		if err != nil {
 			return errorResult(fmt.Sprintf("Failed to encode image generation result: %v", err)), nil
 		}

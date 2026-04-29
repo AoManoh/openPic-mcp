@@ -57,12 +57,28 @@ var EditImageTool = types.Tool{
 				Description: "Optional number of edited images to return. Currently only n=1 is supported.",
 				Default:     "1",
 			},
+			"output_dir": {
+				Type:        "string",
+				Description: "Optional absolute directory where saved images should be written. Overrides OPENPIC_OUTPUT_DIR for this call. Must be an absolute path with no '..' segments; ignored when response_format=b64_json.",
+			},
+			"filename_prefix": {
+				Type:        "string",
+				Description: "Optional filename prefix used when saving images. Limited to [A-Za-z0-9._-] and 32 characters; cannot start with '.'. Falls back to OPENPIC_FILENAME_PREFIX or 'edit' when omitted.",
+			},
+			"overwrite": {
+				Type:        "boolean",
+				Description: "Optional overwrite policy for saved files. When false (the default) collisions cause a numeric suffix to be appended; when true existing files are replaced.",
+			},
 		},
 		Required: []string{"image", "prompt"},
 	},
 }
 
-func EditImageHandler(imageProvider provider.ImageProvider) types.ToolHandler {
+// EditImageHandler returns the MCP tool handler for edit_image. It
+// mirrors GenerateImageHandler's variadic options pattern so the same
+// deployment-level output-path policy is honoured by both code paths.
+func EditImageHandler(imageProvider provider.ImageProvider, opts ...HandlerOption) types.ToolHandler {
+	handlerOpts := applyImageHandlerOptions(opts)
 	return func(ctx context.Context, args map[string]any) (*types.ToolCallResult, error) {
 		imageInput, ok := args["image"].(string)
 		if !ok || imageInput == "" {
@@ -103,6 +119,21 @@ func EditImageHandler(imageProvider provider.ImageProvider) types.ToolHandler {
 			return errorResult(fmt.Sprintf("n=%d is not supported: this tool currently supports only n=1", n)), nil
 		}
 
+		overwriteOverride, err := parseBoolArg(args, "overwrite")
+		if err != nil {
+			return errorResult(err.Error()), nil
+		}
+		policy, err := resolveOutputPolicy(
+			stringArg(args, "output_dir"),
+			stringArg(args, "filename_prefix"),
+			overwriteOverride,
+			"edit",
+			handlerOpts.fallbackPolicy(),
+		)
+		if err != nil {
+			return errorResult(err.Error()), nil
+		}
+
 		// response_format is owned by the tool layer after Phase 2; provider
 		// requests carry only the domain-relevant fields.
 		req := &provider.EditImageRequest{
@@ -132,7 +163,24 @@ func EditImageHandler(imageProvider provider.ImageProvider) types.ToolHandler {
 			return errorResult("Failed to edit image: response contained no images"), nil
 		}
 
-		result, err := imageToolResult(imageResultsFromProvider(resp.Images), resp.Created, responseFormat, outputFormat, "edit")
+		requested := buildRequestedFromArgs(args, prompt, n, responseFormat, overwriteOverride)
+		applied := buildAppliedFromRequest(appliedRequestView{
+			Size:         req.Size,
+			Quality:      req.Quality,
+			OutputFormat: req.OutputFormat,
+			N:            req.N,
+		}, responseFormat, policy)
+		result, err := imageToolResult(
+			imageResultsFromProvider(resp.Images),
+			resp.Created,
+			responseFormat,
+			outputFormat,
+			policy,
+			requested,
+			applied,
+			usageFromProvider(resp.Usage),
+			handlerOpts.MaxInlinePayloadBytes,
+		)
 		if err != nil {
 			return errorResult(fmt.Sprintf("Failed to encode image editing result: %v", err)), nil
 		}

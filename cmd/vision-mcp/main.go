@@ -44,8 +44,20 @@ func main() {
 	// Create tool manager and register every tool exported by the tools
 	// package in a single call. See internal/tools/registry.go for the
 	// authoritative tool list.
+	//
+	// imageOpts derives deployment-level defaults (output dir, filename
+	// prefix, overwrite, inline payload guard) from config so the image
+	// generation/edit tools persist files where the operator asked, with
+	// the names they configured. Per-call MCP arguments still override
+	// these defaults via tools.resolveOutputPolicy.
+	imageOpts := []tools.HandlerOption{
+		tools.WithDefaultOutputDir(cfg.OutputDir),
+		tools.WithDefaultFilenamePrefix(cfg.FilenamePrefix),
+		tools.WithDefaultOverwrite(cfg.Overwrite),
+		tools.WithMaxInlinePayloadBytes(cfg.MaxInlinePayloadBytes),
+	}
 	toolManager := tool.NewManager()
-	if err := tools.RegisterAll(toolManager, openaiProvider, openaiProvider); err != nil {
+	if err := tools.RegisterAll(toolManager, openaiProvider, openaiProvider, imageOpts...); err != nil {
 		log.Fatalf("Failed to register MCP tools: %v", err)
 	}
 

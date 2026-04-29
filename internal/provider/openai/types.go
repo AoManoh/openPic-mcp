@@ -78,6 +78,19 @@ type UsageInfo struct {
 type ImageGenerationResponse struct {
 	Created int64                `json:"created"`
 	Data    []GeneratedImageData `json:"data"`
+	Usage   *ImageUsageInfo      `json:"usage,omitempty"`
+}
+
+// ImageUsageInfo mirrors the optional usage object documented on
+// /v1/images/generations and /v1/images/edits for gpt-image-1 (and a
+// growing list of OpenAI-compatible deployments). Pointer-typed fields
+// let the marshaller omit figures the upstream did not actually return,
+// which the tool layer can then forward to clients faithfully without
+// fabricating zero counters.
+type ImageUsageInfo struct {
+	InputTokens  *int64 `json:"input_tokens,omitempty"`
+	OutputTokens *int64 `json:"output_tokens,omitempty"`
+	TotalTokens  *int64 `json:"total_tokens,omitempty"`
 }
 
 type GeneratedImageData struct {
