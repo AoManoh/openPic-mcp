@@ -144,8 +144,15 @@ docker run -it --rm \
 | `OPENPIC_FILENAME_PREFIX` | 否 | 空（使用工具上下文 `generate` / `edit`） | 默认文件名前缀，仅允许 `[A-Za-z0-9._-]`、最长 32 字符、不能以 `.` 开头；可被工具入参 `filename_prefix` 覆盖 |
 | `OPENPIC_MAX_INLINE_PAYLOAD_BYTES` | 否 | 1048576（1 MiB） | 内联 base64 payload 字节上限。`b64_json` 模式下超阈直接拒绝；`file_path` 模式下追加警告。设置 `0` / 负值会回退到默认 |
 | `OPENPIC_OVERWRITE` | 否 | false | 落盘文件命名冲突时的策略：`false` 追加 `-2`/`-3` 等后缀，`true` 覆盖同名文件；可被工具入参 `overwrite` 覆盖 |
+| `OPENPIC_MAX_CONCURRENT_REQUESTS` | 否 | 16 | 同时执行的 `tools/call` 上限；硬上限 100；`0`/负值/解析失败回退默认；超过上限自动 clamp |
+| `OPENPIC_REQUEST_QUEUE_SIZE` | 否 | 64 | `tools/call` 等待 worker 的有界队列长度；硬上限 10000；同上的 clamp/回退规则。队列满时 recv loop 同步回退处理（绝不丢请求） |
+| `OPENPIC_REQUEST_TIMEOUT` | 否 | 0s（不限） | 单个 `tools/call` 的最大执行时间。`0s` 表示不超时；图片生成可能需要 1-4 分钟，缺省值正是为了不误杀 |
+| `OPENPIC_SHUTDOWN_TIMEOUT` | 否 | 30s | 收到 `SIGINT` / `SIGTERM` 后等待 in-flight `tools/call` 完成的预算；超时则 `engineCancel` 强制收尾。必须 > 0 |
+| `OPENPIC_LOG_FORMAT` | 否 | text | `text` 或 `json`。所有日志一律写 stderr，stdout 仅承载 MCP JSON-RPC 帧 |
 
 > **注意**：`OPENPIC_TIMEOUT` / `VISION_TIMEOUT` 必须使用 Go 的 duration 格式，例如：`30s`（30秒）、`2m`（2分钟）、`5m`（5分钟）。纯数字如 `120` 会导致解析错误。部分图片生成或编辑模型单次推理可能需要 1-4 分钟，不建议将该值设置得过低。
+>
+> 服务器并发与生命周期相关的 5 项变量同样使用 Go duration（`*_TIMEOUT`）和正整数（`*_REQUESTS`、`*_QUEUE_SIZE`）格式。详见下方 [服务器并发与生命周期](#服务器并发与生命周期c4c5-引入) 章节。
 
 ### 配置示例
 
@@ -244,6 +251,82 @@ Windows: `%USERPROFILE%\.cursor\mcp.json`
 ```
 
 > **重要**：`args` 字段必须显式指定（即使为空数组 `[]`），否则 MCP 客户端可能无法正确启动服务。
+
+## 服务器并发与生命周期（C4/C5 引入）
+
+openPic-mcp 内置了一个用 Go 写的 MCP 服务器引擎（`internal/server.Server`），负责调度所有 JSON-RPC 消息、并发执行 `tools/call`、传递取消信号和优雅停机。它就在 `cmd/vision-mcp/main.go` 里被直接装配，用户不需要额外服务。
+
+### 调度模型
+
+```text
+┌──────────────────────────────────────────────────────────────────┐
+│                      MCP Client (stdio peer)                      │
+└────────────────────────────┬─────────────────────────────────────┘
+                             │ JSON-RPC frames
+                             ▼
+                ┌────────────────────────────┐
+                │ internal/transport/Stdio   │  stdout 仅协议帧
+                └─────────────┬──────────────┘
+                              │
+                              ▼
+                ┌────────────────────────────┐
+                │ recv loop (单 goroutine)    │  解析 envelope
+                └─────────┬──────────────────┘
+                          │
+        ┌─────────────────┼──────────────────────────────┐
+        │                 │                              │
+        ▼                 ▼                              ▼
+ 非 tools/call      tools/call → workQueue          notifications/cancelled
+ 同步执行            (有界，cap=64)                   命中 CancelRegistry，
+ (initialize/list)        │                          直接中断 in-flight ctx
+                          │
+              ┌───────────┴───────────┐
+              ▼                       ▼
+        worker pool (16 workers)  队列满 → recv loop 同步回退执行
+              │
+              ▼
+   protocol.MCPHandler.HandleMessage(ctx, raw)
+              │
+              ▼
+            tools.*
+```
+
+要点：
+
+- `tools/call` 走 worker pool，**同时**最多并发 `OPENPIC_MAX_CONCURRENT_REQUESTS` 个；超过队列容量时由 recv loop 同步回退处理，永远不会丢请求。
+- `initialize` / `tools/list` / `notifications/*` 等轻量消息保持在 recv loop 同步派发，避免无谓的并发开销。
+- `notifications/cancelled` 通过 `protocol.CancellationRegistry` 直达对应 in-flight `tools/call` 的 ctx，工具应在所有 HTTP / IO 调用上传播 ctx，让取消立即生效。
+
+### 调优开关
+
+| 维度 | 变量 | 默认值 | 调优建议 |
+|------|------|--------|----------|
+| 并发 worker 数 | `OPENPIC_MAX_CONCURRENT_REQUESTS` | `16` | 上游账户并发额度紧张时降低；本机算力富余、上游放得开时提高（最大 100） |
+| 排队 buffer | `OPENPIC_REQUEST_QUEUE_SIZE` | `64` | 客户端瞬时高并发但希望尽量异步处理时调大（最大 10000）；不希望累积时调小 |
+| 单请求预算 | `OPENPIC_REQUEST_TIMEOUT` | `0s`（不限） | `0s` 是为了不误杀图片生成；如需为 `tools/call` 设硬超时，建议 `≥ 90s` |
+| 优雅停机预算 | `OPENPIC_SHUTDOWN_TIMEOUT` | `30s` | 工具长耗时（图片生成）建议拉长到 `60s`–`120s`；日志/CI 场景缩到 `5s`–`10s` 也可 |
+| 日志格式 | `OPENPIC_LOG_FORMAT` | `text` | 接 ELK/Loki 等日志栈选 `json`；本地终端调试选 `text` |
+
+### 优雅停机
+
+收到 `SIGINT` / `SIGTERM`，引擎按以下顺序收尾：
+
+1. recv loop 退出，停止接收新请求。
+2. 关闭 worker queue，workers 排空已入队的 `tools/call`。
+3. `inflight WaitGroup` 等待所有 in-flight 完成；超过 `OPENPIC_SHUTDOWN_TIMEOUT` 触发 `engineCancel`，让 ctx-aware 工具立即返回错误。
+4. in-flight 全部排空之后再关闭 stdio 连接，保证响应不会被截断。
+
+### 可观测性
+
+引擎统一通过 `*slog.Logger` 写 stderr，关键事件包括：
+
+- `server.boot` / `server.started` / `server.stopped`：生命周期边界。
+- `req.received` / `req.dispatched` / `req.completed` / `req.cancelled`：每条请求一个完整链路。
+- `req.queue_full_fallback`：队列满触发了同步回退；持续出现说明并发不足。
+- `req.panic`：handler panic 已被引擎捕获（不会拖垮 worker），需关注。
+- `server.shutdown_timeout_exceeded` / `server.shutdown_force_abandon`：停机预算被打穿，建议拉长 `OPENPIC_SHUTDOWN_TIMEOUT` 或排查长耗时工具。
+
+> **重要**：所有日志一律走 stderr。如果你看到日志混进 MCP 客户端的 JSON-RPC 通道，绝大概率是 `OPENPIC_LOG_FORMAT` 之外的代码路径误用了 `fmt.Println` 等写 stdout 的 API，请在仓库内 grep 修复后再上线。
 
 ## API/工具说明
 
@@ -572,13 +655,14 @@ openPic-mcp/
 │   ├── main.go
 │   └── main_test.go
 ├── internal/
-│   ├── config/              # 配置管理
+│   ├── config/              # 配置管理 + slog Logger 构造器
 │   ├── errors/              # 错误定义
 │   ├── image/               # 图片处理（本地文件、MIME检测）
-│   ├── protocol/            # 协议层（JSON-RPC、MCP）
+│   ├── protocol/            # 协议层（JSON-RPC、MCP、CancellationRegistry）
 │   ├── provider/            # Provider 层
 │   │   └── openai/          # OpenAI-Compatible Provider
 │   ├── retry/               # 重试机制
+│   ├── server/              # MCP 服务器引擎（worker pool / 队列 / 优雅停机）
 │   ├── service/tool/        # 工具管理器
 │   ├── tools/               # 工具实现
 │   │   ├── describe.go      # describe_image 工具
