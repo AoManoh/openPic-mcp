@@ -3,16 +3,21 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/AoManoh/openPic-mcp/internal/config"
 	"github.com/AoManoh/openPic-mcp/internal/protocol"
+	"github.com/AoManoh/openPic-mcp/internal/provider"
 	"github.com/AoManoh/openPic-mcp/internal/provider/openai"
 	"github.com/AoManoh/openPic-mcp/internal/server"
 	"github.com/AoManoh/openPic-mcp/internal/service/tool"
+	"github.com/AoManoh/openPic-mcp/internal/taskstore"
 	"github.com/AoManoh/openPic-mcp/internal/tools"
 	"github.com/AoManoh/openPic-mcp/internal/transport"
 	"github.com/AoManoh/openPic-mcp/pkg/types"
@@ -53,10 +58,25 @@ func main() {
 		tools.WithDefaultOverwrite(cfg.Overwrite),
 		tools.WithMaxInlinePayloadBytes(cfg.MaxInlinePayloadBytes),
 	}
+	// Bootstrap the async task layer (store + dispatcher). When
+	// TaskStoreEnabled=false this returns (nil, nil, nil) and we run
+	// without async tools; when disk persistence is requested but the
+	// directory cannot be created/written, we fail fast with a fatal
+	// log so deployment misconfiguration is impossible to miss.
+	taskStore, dispatcher, err := bootstrapTaskstore(cfg, logger, openaiProvider, imageOpts)
+	if err != nil {
+		log.Fatalf("Failed to bootstrap async task layer: %v", err)
+	}
+
 	toolManager := tool.NewManager()
-	if err := tools.RegisterAll(toolManager, openaiProvider, openaiProvider,
-		tools.WithImageHandlerOptions(imageOpts...),
-	); err != nil {
+	regOpts := []any{tools.WithImageHandlerOptions(imageOpts...)}
+	if dispatcher != nil {
+		regOpts = append(regOpts, tools.WithAsync(&tools.AsyncBundle{
+			Store:      taskStore,
+			Dispatcher: dispatcher,
+		}))
+	}
+	if err := tools.RegisterAll(toolManager, openaiProvider, openaiProvider, regOpts...); err != nil {
 		log.Fatalf("Failed to register MCP tools: %v", err)
 	}
 
@@ -71,6 +91,17 @@ func main() {
 	// worker pool, the bounded queue, and the cancellation/shutdown
 	// machinery; main only assembles dependencies and translates signals
 	// into ctx cancellation.
+	serverOpts := []server.Option{
+		server.WithLogger(logger),
+		server.WithCancelRegistry(mcpHandler.Cancellations()),
+	}
+	if dispatcher != nil {
+		// The dispatcher implements server.AbandonHook. Wiring it lets
+		// the engine call AbandonRunning("shutdown") before draining
+		// inflight workers, so async tasks unwind via ctx instead of
+		// being silently severed when the transport closes.
+		serverOpts = append(serverOpts, server.WithAbandonHook(dispatcher))
+	}
 	eng := server.New(
 		transport.NewStdio(),
 		mcpHandler,
@@ -80,8 +111,7 @@ func main() {
 			RequestTimeout:        cfg.RequestTimeout,
 			ShutdownTimeout:       cfg.ShutdownTimeout,
 		},
-		server.WithLogger(logger),
-		server.WithCancelRegistry(mcpHandler.Cancellations()),
+		serverOpts...,
 	)
 
 	// Bind SIGINT/SIGTERM to ctx cancellation so a graceful shutdown
@@ -104,12 +134,99 @@ func main() {
 		"shutdown_timeout", cfg.ShutdownTimeout.String(),
 		"log_level", cfg.LogLevel,
 		"log_format", cfg.LogFormat,
+		"task_store_enabled", cfg.TaskStoreEnabled,
+		"task_disk_persist", cfg.TaskDiskPersist,
 	)
-	if err := eng.Run(ctx); err != nil {
-		logger.Error("server.exit", "err", err.Error())
+	runErr := eng.Run(ctx)
+
+	// Graceful tear-down of the async task layer. The server engine
+	// already fired AbandonHook before returning, so workers are
+	// unwinding; Close blocks until they all exit. Order matters:
+	// dispatcher first (writes terminal transitions), then store
+	// (flushes any pending manifest writes via the OnTransition hook
+	// that dispatcher's last calls just fired).
+	if dispatcher != nil {
+		_ = dispatcher.Close()
+	}
+	if taskStore != nil {
+		_ = taskStore.Close()
+	}
+
+	if runErr != nil {
+		logger.Error("server.exit", "err", runErr.Error())
 		os.Exit(1)
 	}
 	logger.Info("server.exit", "completed", eng.Completed(), "fallback", eng.FallbackCount())
+}
+
+// bootstrapTaskstore constructs the async task layer per cfg. Returns
+// nil, nil, nil when TaskStoreEnabled is false (the caller skips
+// registering async tools entirely). Returns a non-nil error only when
+// disk persistence is requested but the configured directory cannot be
+// initialized — a fatal misconfiguration that must surface before the
+// recv loop opens.
+func bootstrapTaskstore(cfg *config.Config, logger *slog.Logger, prov provider.ImageProvider, imageOpts []tools.HandlerOption) (taskstore.Store, *tools.Dispatcher, error) {
+	if !cfg.TaskStoreEnabled {
+		logger.Info("server.task_store.disabled")
+		return nil, nil, nil
+	}
+
+	var store taskstore.Store
+	if cfg.TaskDiskPersist {
+		dir := taskstoreDir(cfg.OutputDir)
+		ds, err := taskstore.NewDisk(taskstore.DiskConfig{
+			Dir:         dir,
+			MaxQueued:   cfg.TaskMaxQueued,
+			MaxRetained: cfg.TaskMaxRetained,
+			Logger:      logger,
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("tasks directory %q: %w", dir, err)
+		}
+		logger.Info("server.task_store.disk_ready",
+			"dir", dir,
+			"max_queued", cfg.TaskMaxQueued,
+			"max_retained", cfg.TaskMaxRetained,
+			"ttl", cfg.TaskTTL.String(),
+		)
+		store = ds
+	} else {
+		store = taskstore.NewMemory(taskstore.MemoryConfig{
+			MaxQueued:   cfg.TaskMaxQueued,
+			MaxRetained: cfg.TaskMaxRetained,
+		})
+		logger.Info("server.task_store.memory_only",
+			"max_queued", cfg.TaskMaxQueued,
+			"max_retained", cfg.TaskMaxRetained,
+		)
+	}
+
+	disp, err := tools.NewDispatcher(tools.DispatcherConfig{
+		Store:          store,
+		Provider:       prov,
+		Workers:        cfg.MaxConcurrentRequests,
+		QueueSize:      cfg.TaskMaxQueued,
+		Logger:         logger,
+		HandlerOptions: imageOpts,
+	})
+	if err != nil {
+		_ = store.Close()
+		return nil, nil, fmt.Errorf("dispatcher: %w", err)
+	}
+	return store, disp, nil
+}
+
+// taskstoreDir derives the per-deployment manifest directory. We hang
+// it off the configured OutputDir so operators only authorize one
+// filesystem location; if OutputDir is unset we fall back to the same
+// $TMPDIR/openpic-mcp legacy root the image-saving code uses, so the
+// async layer follows the same data-locality story as everything else.
+func taskstoreDir(outputDir string) string {
+	base := outputDir
+	if base == "" {
+		base = filepath.Join(os.TempDir(), "openpic-mcp")
+	}
+	return filepath.Join(base, "tasks")
 }
 
 // createToolsListHandler creates a handler for tools/list requests.
