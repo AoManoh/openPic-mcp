@@ -141,13 +141,24 @@ func (c *LayeredConfig) Sources() []string {
 func (c *LayeredConfig) BuildConfig() (*Config, error) {
 	visionModel := c.getFirst("OPENPIC_VISION_MODEL", "VISION_MODEL")
 	cfg := &Config{
-		APIBaseURL:  c.getFirst("OPENPIC_API_BASE_URL", "VISION_API_BASE_URL"),
-		APIKey:      c.getFirst("OPENPIC_API_KEY", "VISION_API_KEY"),
-		Model:       visionModel,
-		VisionModel: visionModel,
-		ImageModel:  c.Get("OPENPIC_IMAGE_MODEL"),
-		Timeout:     ParseDuration(c.getFirst("OPENPIC_TIMEOUT", "VISION_TIMEOUT"), DefaultTimeout),
-		LogLevel:    c.GetString("OPENPIC_LOG_LEVEL", c.GetString("VISION_LOG_LEVEL", DefaultLogLevel)),
+		APIBaseURL:            c.getFirst("OPENPIC_API_BASE_URL", "VISION_API_BASE_URL"),
+		APIKey:                c.getFirst("OPENPIC_API_KEY", "VISION_API_KEY"),
+		Model:                 visionModel,
+		VisionModel:           visionModel,
+		ImageModel:            c.Get("OPENPIC_IMAGE_MODEL"),
+		OutputDir:             c.Get("OPENPIC_OUTPUT_DIR"),
+		FilenamePrefix:        c.Get("OPENPIC_FILENAME_PREFIX"),
+		MaxInlinePayloadBytes: c.GetInt64("OPENPIC_MAX_INLINE_PAYLOAD_BYTES", DefaultMaxInlinePayloadBytes),
+		Overwrite:             c.GetBool("OPENPIC_OVERWRITE", DefaultOverwrite),
+		Timeout:               ParseDuration(c.getFirst("OPENPIC_TIMEOUT", "VISION_TIMEOUT"), DefaultTimeout),
+		LogLevel:              c.GetString("OPENPIC_LOG_LEVEL", c.GetString("VISION_LOG_LEVEL", DefaultLogLevel)),
+	}
+
+	// Treat non-positive overrides as a request for the default. This
+	// keeps the inline payload guard always on; configurations that try
+	// to disable it via 0 or a negative value still get a safe budget.
+	if cfg.MaxInlinePayloadBytes <= 0 {
+		cfg.MaxInlinePayloadBytes = DefaultMaxInlinePayloadBytes
 	}
 
 	if err := cfg.Validate(); err != nil {

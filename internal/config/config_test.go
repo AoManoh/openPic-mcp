@@ -14,6 +14,10 @@ func resetConfigEnv(t *testing.T) {
 		"OPENPIC_IMAGE_MODEL",
 		"OPENPIC_TIMEOUT",
 		"OPENPIC_LOG_LEVEL",
+		"OPENPIC_OUTPUT_DIR",
+		"OPENPIC_FILENAME_PREFIX",
+		"OPENPIC_MAX_INLINE_PAYLOAD_BYTES",
+		"OPENPIC_OVERWRITE",
 		"VISION_API_BASE_URL",
 		"VISION_API_KEY",
 		"VISION_MODEL",
@@ -22,6 +26,13 @@ func resetConfigEnv(t *testing.T) {
 	} {
 		t.Setenv(key, "")
 	}
+}
+
+func setRequiredImageEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("OPENPIC_API_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("OPENPIC_API_KEY", "test-key")
+	t.Setenv("OPENPIC_VISION_MODEL", "gpt-4o")
 }
 
 func TestLoad_Success(t *testing.T) {
@@ -183,6 +194,90 @@ func TestLoad_InvalidTimeout(t *testing.T) {
 	_, err := Load()
 	if err == nil {
 		t.Fatal("Load() error = nil, want error")
+	}
+}
+
+func TestLoad_ImageOutputDefaults(t *testing.T) {
+	resetConfigEnv(t)
+	setRequiredImageEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+
+	if cfg.OutputDir != "" {
+		t.Errorf("OutputDir default = %q, want empty", cfg.OutputDir)
+	}
+	if cfg.FilenamePrefix != "" {
+		t.Errorf("FilenamePrefix default = %q, want empty", cfg.FilenamePrefix)
+	}
+	if cfg.MaxInlinePayloadBytes != DefaultMaxInlinePayloadBytes {
+		t.Errorf("MaxInlinePayloadBytes default = %d, want %d", cfg.MaxInlinePayloadBytes, DefaultMaxInlinePayloadBytes)
+	}
+	if cfg.Overwrite != DefaultOverwrite {
+		t.Errorf("Overwrite default = %v, want %v", cfg.Overwrite, DefaultOverwrite)
+	}
+}
+
+func TestLoad_ImageOutputOverrides(t *testing.T) {
+	resetConfigEnv(t)
+	setRequiredImageEnv(t)
+	t.Setenv("OPENPIC_OUTPUT_DIR", "/tmp/openpic-test-out")
+	t.Setenv("OPENPIC_FILENAME_PREFIX", "demo")
+	t.Setenv("OPENPIC_MAX_INLINE_PAYLOAD_BYTES", "262144")
+	t.Setenv("OPENPIC_OVERWRITE", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+
+	if cfg.OutputDir != "/tmp/openpic-test-out" {
+		t.Errorf("OutputDir = %q, want /tmp/openpic-test-out", cfg.OutputDir)
+	}
+	if cfg.FilenamePrefix != "demo" {
+		t.Errorf("FilenamePrefix = %q, want demo", cfg.FilenamePrefix)
+	}
+	if cfg.MaxInlinePayloadBytes != 262144 {
+		t.Errorf("MaxInlinePayloadBytes = %d, want 262144", cfg.MaxInlinePayloadBytes)
+	}
+	if !cfg.Overwrite {
+		t.Errorf("Overwrite = false, want true")
+	}
+}
+
+func TestLoad_NonPositiveMaxInlinePayloadBytesFallsBack(t *testing.T) {
+	resetConfigEnv(t)
+	setRequiredImageEnv(t)
+	t.Setenv("OPENPIC_MAX_INLINE_PAYLOAD_BYTES", "0")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.MaxInlinePayloadBytes != DefaultMaxInlinePayloadBytes {
+		t.Errorf("MaxInlinePayloadBytes = %d, want default %d", cfg.MaxInlinePayloadBytes, DefaultMaxInlinePayloadBytes)
+	}
+}
+
+func TestLoad_InvalidMaxInlinePayloadBytes(t *testing.T) {
+	resetConfigEnv(t)
+	setRequiredImageEnv(t)
+	t.Setenv("OPENPIC_MAX_INLINE_PAYLOAD_BYTES", "not-a-number")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want error for invalid OPENPIC_MAX_INLINE_PAYLOAD_BYTES")
+	}
+}
+
+func TestLoad_InvalidOverwrite(t *testing.T) {
+	resetConfigEnv(t)
+	setRequiredImageEnv(t)
+	t.Setenv("OPENPIC_OVERWRITE", "maybe")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want error for invalid OPENPIC_OVERWRITE")
 	}
 }
 

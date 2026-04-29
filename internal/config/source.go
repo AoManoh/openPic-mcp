@@ -37,13 +37,15 @@ type DefaultSource struct {
 func NewDefaultSource() *DefaultSource {
 	return &DefaultSource{
 		defaults: map[string]string{
-			"VISION_TIMEOUT":          "5m",
-			"VISION_LOG_LEVEL":        "info",
-			"VISION_MAX_RETRIES":      "3",
-			"VISION_RETRY_BASE_DELAY": "1s",
-			"VISION_RETRY_MAX_DELAY":  "30s",
-			"VISION_MAX_IMAGE_SIZE":   "20971520", // 20MB
-			"VISION_ALLOWED_FORMATS":  "jpg,jpeg,png,gif,webp",
+			"VISION_TIMEOUT":                   "5m",
+			"VISION_LOG_LEVEL":                 "info",
+			"VISION_MAX_RETRIES":               "3",
+			"VISION_RETRY_BASE_DELAY":          "1s",
+			"VISION_RETRY_MAX_DELAY":           "30s",
+			"VISION_MAX_IMAGE_SIZE":            "20971520", // 20MB
+			"VISION_ALLOWED_FORMATS":           "jpg,jpeg,png,gif,webp",
+			"OPENPIC_MAX_INLINE_PAYLOAD_BYTES": "1048576", // 1 MiB; matches DefaultMaxInlinePayloadBytes.
+			"OPENPIC_OVERWRITE":                "false",
 		},
 	}
 }
