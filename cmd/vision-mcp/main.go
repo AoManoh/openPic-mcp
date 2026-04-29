@@ -54,7 +54,9 @@ func main() {
 		tools.WithMaxInlinePayloadBytes(cfg.MaxInlinePayloadBytes),
 	}
 	toolManager := tool.NewManager()
-	if err := tools.RegisterAll(toolManager, openaiProvider, openaiProvider, imageOpts...); err != nil {
+	if err := tools.RegisterAll(toolManager, openaiProvider, openaiProvider,
+		tools.WithImageHandlerOptions(imageOpts...),
+	); err != nil {
 		log.Fatalf("Failed to register MCP tools: %v", err)
 	}
 

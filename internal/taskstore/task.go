@@ -55,6 +55,12 @@ var allowedTransitions = map[State]map[State]struct{}{
 		StateRunning:   {},
 		StateCancelled: {},
 		StateAbandoned: {},
+		// StateFailed is allowed from queued for the narrow case where
+		// the dispatcher accepted the Submit but then rejected the
+		// Dispatch (e.g. its internal queue is full). The task never
+		// ran but it has a definite negative outcome the caller should
+		// see — leaving it as queued forever would be worse.
+		StateFailed: {},
 	},
 	StateRunning: {
 		StateCompleted: {},

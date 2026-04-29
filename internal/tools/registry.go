@@ -5,8 +5,46 @@ import (
 
 	"github.com/AoManoh/openPic-mcp/internal/provider"
 	"github.com/AoManoh/openPic-mcp/internal/service/tool"
+	"github.com/AoManoh/openPic-mcp/internal/taskstore"
 	"github.com/AoManoh/openPic-mcp/pkg/types"
 )
+
+// AsyncBundle bundles the dependencies the async tools need. Pass it to
+// [RegisterAll] via [WithAsync] when the deployment has the async layer
+// enabled. A nil bundle skips registration of submit_image_task /
+// get_task_result / list_tasks / cancel_task; existing sync tools
+// remain available either way.
+type AsyncBundle struct {
+	Store      taskstore.Store
+	Dispatcher taskDispatcher
+}
+
+// RegisterOption mutates the registration plan.
+type RegisterOption func(*registerOptions)
+
+type registerOptions struct {
+	imageOpts []HandlerOption
+	async     *AsyncBundle
+}
+
+// WithImageHandlerOptions threads deployment-level output-path options
+// into the sync image-producing handlers (generate_image, edit_image).
+// Existing call sites that pass these positionally to RegisterAll keep
+// working via the variadic-compatible bridge below.
+func WithImageHandlerOptions(opts ...HandlerOption) RegisterOption {
+	return func(o *registerOptions) { o.imageOpts = append(o.imageOpts, opts...) }
+}
+
+// WithAsync registers the four async task tools backed by the given
+// store + dispatcher. Passing nil is a no-op so callers can pipe an
+// optional config-driven bundle straight through.
+func WithAsync(b *AsyncBundle) RegisterOption {
+	return func(o *registerOptions) {
+		if b != nil && b.Store != nil && b.Dispatcher != nil {
+			o.async = b
+		}
+	}
+}
 
 // toolBinding pairs a tool definition with the handler factory used to wire
 // it against the provider abstractions. Keeping this as an internal slice
@@ -27,12 +65,12 @@ type toolBinding struct {
 // transports (e.g. Streamable HTTP) can reuse it unchanged, and adding a
 // new tool only requires extending the slice below.
 //
-// The variadic imageOpts are forwarded only to the image-producing
-// handlers (generate_image, edit_image). describe_image and
-// compare_images do not persist images so they ignore output-path
-// options. Passing no options preserves the pre-P1 behaviour: writes go
-// to os.TempDir()/openpic-mcp/ with a randomised name.
-func RegisterAll(manager *tool.Manager, vp provider.VisionProvider, ip provider.ImageProvider, imageOpts ...HandlerOption) error {
+// imageOpts (the trailing variadic) are forwarded only to the
+// image-producing sync handlers (generate_image, edit_image). The
+// preferred call shape is to pass [WithImageHandlerOptions] /
+// [WithAsync] via the new [RegisterOption] varargs; the trailing slice
+// is retained for backwards compatibility with existing call sites.
+func RegisterAll(manager *tool.Manager, vp provider.VisionProvider, ip provider.ImageProvider, opts ...any) error {
 	if manager == nil {
 		return fmt.Errorf("tool manager is required")
 	}
@@ -43,12 +81,37 @@ func RegisterAll(manager *tool.Manager, vp provider.VisionProvider, ip provider.
 		return fmt.Errorf("image provider is required")
 	}
 
+	regOpts := registerOptions{}
+	for _, raw := range opts {
+		switch o := raw.(type) {
+		case HandlerOption:
+			regOpts.imageOpts = append(regOpts.imageOpts, o)
+		case RegisterOption:
+			if o != nil {
+				o(&regOpts)
+			}
+		case nil:
+			// permitted; treat as zero-value option
+		default:
+			return fmt.Errorf("RegisterAll: unsupported option type %T", raw)
+		}
+	}
+
 	bindings := []toolBinding{
 		{def: DescribeImageTool, handler: DescribeImageHandler(vp)},
 		{def: CompareImagesTool, handler: CompareImagesHandler(vp)},
-		{def: GenerateImageTool, handler: GenerateImageHandler(ip, imageOpts...)},
-		{def: EditImageTool, handler: EditImageHandler(ip, imageOpts...)},
+		{def: GenerateImageTool, handler: GenerateImageHandler(ip, regOpts.imageOpts...)},
+		{def: EditImageTool, handler: EditImageHandler(ip, regOpts.imageOpts...)},
 		{def: ListImageCapabilitiesTool, handler: ListImageCapabilitiesHandler()},
+	}
+
+	if regOpts.async != nil {
+		bindings = append(bindings,
+			toolBinding{def: SubmitImageTaskTool, handler: SubmitImageTaskHandler(regOpts.async.Store, regOpts.async.Dispatcher)},
+			toolBinding{def: GetTaskResultTool, handler: GetTaskResultHandler(regOpts.async.Store)},
+			toolBinding{def: ListTasksTool, handler: ListTasksHandler(regOpts.async.Store)},
+			toolBinding{def: CancelTaskTool, handler: CancelTaskHandler(regOpts.async.Store)},
+		)
 	}
 
 	for _, b := range bindings {
