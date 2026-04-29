@@ -121,8 +121,8 @@ docker build -t openpic-mcp:latest .
 docker run -it --rm \
   -e OPENPIC_API_BASE_URL=https://api.openai.com/v1 \
   -e OPENPIC_API_KEY=your-api-key \
-  -e OPENPIC_VISION_MODEL=gpt-4o \
-  -e OPENPIC_IMAGE_MODEL=gpt-image-1 \
+  -e OPENPIC_VISION_MODEL=gpt-5.5 \
+  -e OPENPIC_IMAGE_MODEL=gpt-image-2 \
   openpic-mcp:latest
 ```
 
@@ -140,27 +140,39 @@ docker run -it --rm \
 | `OPENPIC_IMAGE_MODEL` | 使用 `generate_image` 或 `edit_image` 时必填 | - | 图片生成或编辑模型 |
 | `OPENPIC_TIMEOUT` | 否 | 5m | API 请求超时时间，兼容 `VISION_TIMEOUT` |
 | `OPENPIC_LOG_LEVEL` | 否 | info | 日志级别，兼容 `VISION_LOG_LEVEL` |
+| `OPENPIC_OUTPUT_DIR` | 否 | 空（使用 `os.TempDir()/openpic-mcp/`） | `generate_image` / `edit_image` 默认落盘目录，必须为绝对路径；可被工具入参 `output_dir` 覆盖 |
+| `OPENPIC_FILENAME_PREFIX` | 否 | 空（使用工具上下文 `generate` / `edit`） | 默认文件名前缀，仅允许 `[A-Za-z0-9._-]`、最长 32 字符、不能以 `.` 开头；可被工具入参 `filename_prefix` 覆盖 |
+| `OPENPIC_MAX_INLINE_PAYLOAD_BYTES` | 否 | 1048576（1 MiB） | 内联 base64 payload 字节上限。`b64_json` 模式下超阈直接拒绝；`file_path` 模式下追加警告。设置 `0` / 负值会回退到默认 |
+| `OPENPIC_OVERWRITE` | 否 | false | 落盘文件命名冲突时的策略：`false` 追加 `-2`/`-3` 等后缀，`true` 覆盖同名文件；可被工具入参 `overwrite` 覆盖 |
 
 > **注意**：`OPENPIC_TIMEOUT` / `VISION_TIMEOUT` 必须使用 Go 的 duration 格式，例如：`30s`（30秒）、`2m`（2分钟）、`5m`（5分钟）。纯数字如 `120` 会导致解析错误。部分图片生成或编辑模型单次推理可能需要 1-4 分钟，不建议将该值设置得过低。
 
 ### 配置示例
 
-OpenAI:
+OpenAI（截至 2026-04-29，以 OpenAI API 实际可用为准）：
 
 ```bash
 OPENPIC_API_BASE_URL=https://api.openai.com/v1
 OPENPIC_API_KEY=your-openai-api-key
-OPENPIC_VISION_MODEL=gpt-4o
-OPENPIC_IMAGE_MODEL=gpt-image-1
+# 视觉模型可选：
+#   - gpt-5.5（2026-04-23 旗舰，推荐默认）、gpt-5.5-pro（高精度）
+#   - gpt-5.4 / gpt-5.4-pro（平衡）
+#   - gpt-5.4-mini / gpt-5.4-nano（轻量、高并发、低成本）
+#   - gpt-5 / gpt-5.2（旧版 snapshot 回退）
+OPENPIC_VISION_MODEL=gpt-5.5
+# 图像模型可选：gpt-image-2（2026-04-21 旗舰、原生 4K、思考模式）、gpt-image-1.5 / gpt-image-1（前代回退）
+OPENPIC_IMAGE_MODEL=gpt-image-2
 ```
 
-Azure OpenAI:
+Azure OpenAI（部署名称由订阅决定，下方仅示意；Azure 上的 GPT-5.5 / gpt-image-2 可能比 OpenAI 直连晚到货）：
 
 ```bash
 OPENPIC_API_BASE_URL=https://your-resource.openai.azure.com/openai/deployments/your-deployment
 OPENPIC_API_KEY=your-azure-api-key
-OPENPIC_VISION_MODEL=gpt-4o
-OPENPIC_IMAGE_MODEL=your-image-model-name
+# 视觉模型用 Azure 上对应的部署名（通常映射到 gpt-5.5 / gpt-5.4-mini）
+OPENPIC_VISION_MODEL=your-vision-deployment-name
+# 图像模型用 Azure 上对应的部署名（通常映射到 gpt-image-2 / gpt-image-1.5）
+OPENPIC_IMAGE_MODEL=your-image-deployment-name
 ```
 
 自托管服务:
@@ -197,8 +209,8 @@ Windows: `%APPDATA%\Claude\claude_desktop_config.json`
       "env": {
         "OPENPIC_API_BASE_URL": "https://api.openai.com/v1",
         "OPENPIC_API_KEY": "your-api-key",
-        "OPENPIC_VISION_MODEL": "gpt-4o",
-        "OPENPIC_IMAGE_MODEL": "gpt-image-1",
+        "OPENPIC_VISION_MODEL": "gpt-5.5",
+        "OPENPIC_IMAGE_MODEL": "gpt-image-2",
         "OPENPIC_TIMEOUT": "5m"
       }
     }
@@ -222,8 +234,8 @@ Windows: `%USERPROFILE%\.cursor\mcp.json`
       "env": {
         "OPENPIC_API_BASE_URL": "https://api.openai.com/v1",
         "OPENPIC_API_KEY": "your-api-key",
-        "OPENPIC_VISION_MODEL": "gpt-4o",
-        "OPENPIC_IMAGE_MODEL": "gpt-image-1",
+        "OPENPIC_VISION_MODEL": "gpt-5.5",
+        "OPENPIC_IMAGE_MODEL": "gpt-image-2",
         "OPENPIC_TIMEOUT": "5m"
       }
     }
@@ -354,6 +366,9 @@ Windows: `%USERPROFILE%\.cursor\mcp.json`
 | `quality` | string | 否 | 输出质量，实际取值取决于服务支持情况 |
 | `response_format` | string | 否 | 响应格式：`file_path`、`url` 或 `b64_json`，默认 `file_path`；仅显式选择 `b64_json` 时返回内联 Base64；若上游在 `url` 模式返回 Data URI，服务端会自动落盘并返回 `file_path` |
 | `n` | number | 否 | 生成图片数量，当前仅支持 `1` |
+| `output_dir` | string | 否 | 单次调用的落盘目录，绝对路径，无 `..` 段；覆盖 `OPENPIC_OUTPUT_DIR`；`response_format=b64_json` 时被忽略 |
+| `filename_prefix` | string | 否 | 单次调用的文件名前缀；规则同 `OPENPIC_FILENAME_PREFIX`；覆盖部署级默认 |
+| `overwrite` | boolean | 否 | 单次调用的覆盖策略；覆盖 `OPENPIC_OVERWRITE` |
 
 **示例请求：**
 
@@ -364,6 +379,8 @@ Windows: `%USERPROFILE%\.cursor\mcp.json`
     "prompt": "一只橘猫坐在窗边，电影感光影",
     "size": "1024x1024",
     "response_format": "file_path",
+    "output_dir": "/var/lib/openpic-mcp/images",
+    "filename_prefix": "demo",
     "n": 1
   }
 }
@@ -376,7 +393,7 @@ Windows: `%USERPROFILE%\.cursor\mcp.json`
   "content": [
     {
       "type": "text",
-      "text": "{\n  \"images\": [\n    {\n      \"file_path\": \"/tmp/openpic-mcp/generate-123456.png\"\n    }\n  ],\n  \"created\": 1234567890\n}"
+      "text": "{\n  \"images\": [\n    {\n      \"file_path\": \"/var/lib/openpic-mcp/images/demo-20260429-022045-3f8a91b2.png\",\n      \"format\": \"png\"\n    }\n  ],\n  \"created\": 1234567890,\n  \"requested\": {\n    \"prompt\": \"一只橘猫坐在窗边，电影感光影\",\n    \"size\": \"1024x1024\",\n    \"response_format\": \"file_path\",\n    \"n\": 1,\n    \"output_dir\": \"/var/lib/openpic-mcp/images\",\n    \"filename_prefix\": \"demo\"\n  },\n  \"applied\": {\n    \"size\": \"1024x1024\",\n    \"n\": 1,\n    \"response_format\": \"file_path\",\n    \"output_dir\": \"/var/lib/openpic-mcp/images\",\n    \"filename_prefix\": \"demo\",\n    \"overwrite\": false\n  },\n  \"files\": [\n    {\n      \"index\": 0,\n      \"path\": \"/var/lib/openpic-mcp/images/demo-20260429-022045-3f8a91b2.png\",\n      \"size_bytes\": 70,\n      \"format\": \"png\"\n    }\n  ]\n}"
     }
   ]
 }
@@ -397,6 +414,9 @@ Windows: `%USERPROFILE%\.cursor\mcp.json`
 | `quality` | string | 否 | 输出质量，实际取值取决于服务支持情况 |
 | `response_format` | string | 否 | 响应格式：`file_path`、`url` 或 `b64_json`，默认 `file_path`；仅显式选择 `b64_json` 时返回内联 Base64；若上游在 `url` 模式返回 Data URI，服务端会自动落盘并返回 `file_path` |
 | `n` | number | 否 | 编辑结果数量，当前仅支持 `1` |
+| `output_dir` | string | 否 | 单次调用的落盘目录，绝对路径，无 `..` 段；覆盖 `OPENPIC_OUTPUT_DIR`；`response_format=b64_json` 时被忽略 |
+| `filename_prefix` | string | 否 | 单次调用的文件名前缀；规则同 `OPENPIC_FILENAME_PREFIX`；覆盖部署级默认 |
+| `overwrite` | boolean | 否 | 单次调用的覆盖策略；覆盖 `OPENPIC_OVERWRITE` |
 
 **示例请求：**
 
@@ -408,6 +428,7 @@ Windows: `%USERPROFILE%\.cursor\mcp.json`
     "prompt": "给这只猫添加一顶红色帽子",
     "size": "1024x1024",
     "response_format": "file_path",
+    "output_dir": "/var/lib/openpic-mcp/images",
     "n": 1
   }
 }
@@ -420,7 +441,7 @@ Windows: `%USERPROFILE%\.cursor\mcp.json`
   "content": [
     {
       "type": "text",
-      "text": "{\n  \"images\": [\n    {\n      \"file_path\": \"/tmp/openpic-mcp/edit-123456.png\"\n    }\n  ],\n  \"created\": 1234567890\n}"
+      "text": "{\n  \"images\": [\n    {\n      \"file_path\": \"/var/lib/openpic-mcp/images/edit-20260429-022146-8c11e2af.png\",\n      \"format\": \"png\"\n    }\n  ],\n  \"created\": 1234567890,\n  \"requested\": {\n    \"prompt\": \"给这只猫添加一顶红色帽子\",\n    \"size\": \"1024x1024\",\n    \"response_format\": \"file_path\",\n    \"n\": 1,\n    \"output_dir\": \"/var/lib/openpic-mcp/images\"\n  },\n  \"applied\": {\n    \"size\": \"1024x1024\",\n    \"n\": 1,\n    \"response_format\": \"file_path\",\n    \"output_dir\": \"/var/lib/openpic-mcp/images\",\n    \"filename_prefix\": \"edit\",\n    \"overwrite\": false\n  },\n  \"files\": [\n    {\n      \"index\": 0,\n      \"path\": \"/var/lib/openpic-mcp/images/edit-20260429-022146-8c11e2af.png\",\n      \"size_bytes\": 70,\n      \"format\": \"png\"\n    }\n  ]\n}"
     }
   ]
 }
@@ -470,6 +491,38 @@ Windows: `%USERPROFILE%\.cursor\mcp.json`
 > - `warnings[]`：当请求的 `output_format` 与检测格式不一致时附加的提示（例如 `images[0]: requested output_format="webp" but upstream returned "png"; saved as .png`）。
 >
 > 调用 `list_image_capabilities` 可拿到 `output_format_enforcement: "advisory"` 与 `output_format_notes` 完整披露。
+
+#### 输出路径策略（P1）
+
+`generate_image` / `edit_image` 在 `response_format=file_path`（默认）或 `url` 模式下会把上游字节落到本地磁盘。落盘行为遵循下列优先级：
+
+1. 单次调用入参 `output_dir` / `filename_prefix` / `overwrite`。
+2. 部署级环境变量 `OPENPIC_OUTPUT_DIR` / `OPENPIC_FILENAME_PREFIX` / `OPENPIC_OVERWRITE`。
+3. 默认值：`os.TempDir()/openpic-mcp/`、工具上下文 `generate` / `edit`、不覆盖。
+
+文件名模板为 `<prefix>-YYYYMMDD-HHMMSS-<8hex>.<ext>`，其中：
+
+- `<ext>` 来自 magic-byte 检测出的真实格式（`png` / `jpeg` / `webp` / ...），与 `output_format` 是否兑现解耦。
+- `<8hex>` 是 4 字节随机数的十六进制；`overwrite=false` 模式同名冲突时追加 `-2` / `-3` 直到唯一。
+
+`output_dir` 必须是绝对路径且不含 `..` 段，否则在到达上游前直接返回错误。`filename_prefix` 限制在 `[A-Za-z0-9._-]`、最长 32 字符且不能以 `.` 开头。
+
+#### 结构化结果合同（P1）
+
+`generate_image` / `edit_image` 的响应在保留 `images` / `created` / `warnings` 兼容字段之外，新增以下结构化字段，便于 MCP 客户端区分"调用方传入"与"服务端实际生效"：
+
+- `requested`：调用方实际传入的关键参数（`prompt` / `size` / `aspect_ratio` / `quality` / `output_format` / `response_format` / `n` / `output_dir` / `filename_prefix` / `overwrite`）。未传字段用 `omitempty` 省略。
+- `applied`：发往上游的参数（`size` / `quality` / `output_format` / `n`）以及最终生效的交付参数（`response_format` / `output_dir` / `filename_prefix` / `overwrite`）。
+- `files[]`：每张落盘文件的 `index` / `path` / `size_bytes` / `format`。`response_format=b64_json` 时该字段被省略。
+- `usage`：仅在上游响应里携带 `usage` 时透传 `input_tokens` / `output_tokens` / `total_tokens`，缺字段以 `omitempty` 省略。openPic-mcp 不会伪造任何 token 数。
+
+#### 内联 payload 字节预算（P1）
+
+`OPENPIC_MAX_INLINE_PAYLOAD_BYTES` 默认 `1048576`（1 MiB）。
+
+- `response_format=b64_json` 模式下若解码后超阈：直接返回 `isError` 工具结果，提示改用 `file_path` 或下调 `quality` / `size`，**不会静默切换交付方式**。
+- `response_format=file_path` / `url` 模式下若超阈：照常落盘，但响应里会附加一条 `warnings[]`，便于调用方主动调参或扩大预算。
+- 设置为 `0` 或负值会被忽略，回退到默认，避免误关 guard。
 
 #### 502 / `upstream_error` 误读指南
 
