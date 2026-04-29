@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/AoManoh/openPic-mcp/internal/config"
 	"github.com/AoManoh/openPic-mcp/internal/protocol"
 	"github.com/AoManoh/openPic-mcp/internal/provider/openai"
+	"github.com/AoManoh/openPic-mcp/internal/server"
 	"github.com/AoManoh/openPic-mcp/internal/service/tool"
 	"github.com/AoManoh/openPic-mcp/internal/tools"
 	"github.com/AoManoh/openPic-mcp/internal/transport"
@@ -183,18 +185,35 @@ func TestStdioTransportIntegration(t *testing.T) {
 	}
 }
 
-func TestRunMessageLoopReturnsNilOnEOF(t *testing.T) {
+// TestServerEngineRunsInitializeOverStdio is the end-to-end smoke check for
+// the wiring assembled in main: the protocol handler is driven through the
+// real server engine over an in-memory stdio transport. It guarantees that
+// a single `initialize` request is processed and the canonical response is
+// flushed before the engine returns from EOF.
+func TestServerEngineRunsInitializeOverStdio(t *testing.T) {
 	handler, _ := setupTestServer()
-	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`)
+	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}` + "\n")
 	output := &bytes.Buffer{}
-	conn, err := transport.NewStdioWithIO(input, output).Connect(context.Background())
-	if err != nil {
-		t.Fatalf("Connect error: %v", err)
-	}
-	defer conn.Close()
 
-	if err := runMessageLoop(context.Background(), conn, handler); err != nil {
-		t.Fatalf("runMessageLoop() error = %v, want nil", err)
+	eng := server.New(
+		transport.NewStdioWithIO(input, output),
+		handler,
+		server.Config{
+			MaxConcurrentRequests: 2,
+			RequestQueueSize:      4,
+			ShutdownTimeout:       2 * time.Second,
+		},
+		server.WithCancelRegistry(handler.Cancellations()),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := eng.Run(ctx); err != nil {
+		t.Fatalf("server.Run() error = %v, want nil", err)
+	}
+	if got := eng.Completed(); got != 1 {
+		t.Errorf("Completed() = %d, want 1", got)
 	}
 	if !strings.Contains(output.String(), "protocolVersion") {
 		t.Fatalf("output missing initialize response: %s", output.String())

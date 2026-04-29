@@ -3,9 +3,6 @@ package main
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -14,6 +11,7 @@ import (
 	"github.com/AoManoh/openPic-mcp/internal/config"
 	"github.com/AoManoh/openPic-mcp/internal/protocol"
 	"github.com/AoManoh/openPic-mcp/internal/provider/openai"
+	"github.com/AoManoh/openPic-mcp/internal/server"
 	"github.com/AoManoh/openPic-mcp/internal/service/tool"
 	"github.com/AoManoh/openPic-mcp/internal/tools"
 	"github.com/AoManoh/openPic-mcp/internal/transport"
@@ -21,40 +19,34 @@ import (
 )
 
 func main() {
-	// Set up logging to stderr (stdout is used for MCP communication)
+	// The bootstrap-only `log` package is still useful for fatal startup
+	// errors before the structured logger is constructed. It writes to
+	// stderr — stdout is reserved exclusively for the MCP JSON-RPC stream.
 	log.SetOutput(os.Stderr)
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	// Load configuration
+	// Load configuration. Misconfigured deployments must fail loudly here
+	// rather than degrade silently inside the dispatch loop.
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	// Create transport. Connect synchronously while we still own the
-	// initialization context so a misbehaving stdio peer surfaces here
-	// instead of inside the receive loop.
-	conn, err := transport.NewStdio().Connect(context.Background())
-	if err != nil {
-		log.Fatalf("Failed to connect transport: %v", err)
-	}
-	defer conn.Close()
+	// Build the structured logger that the server engine and (eventually)
+	// the protocol/tools layers share. It writes to stderr regardless of
+	// format so it can never poison the stdio MCP channel.
+	logger := config.NewLogger(cfg)
 
-	// Create provider. The same struct currently satisfies both the vision
-	// and image-generation interfaces; passing it twice keeps the seams
-	// explicit so a future deployment can plug different providers in for
-	// each capability without touching this entry point.
+	// The provider is shared between vision and image-generation tools.
+	// Passing it twice keeps the seams explicit so a future deployment can
+	// plug different providers in for each capability without touching
+	// this entry point.
 	openaiProvider := openai.NewProvider(cfg)
 
-	// Create tool manager and register every tool exported by the tools
-	// package in a single call. See internal/tools/registry.go for the
-	// authoritative tool list.
-	//
-	// imageOpts derives deployment-level defaults (output dir, filename
-	// prefix, overwrite, inline payload guard) from config so the image
-	// generation/edit tools persist files where the operator asked, with
-	// the names they configured. Per-call MCP arguments still override
-	// these defaults via tools.resolveOutputPolicy.
+	// Tool registry. imageOpts threads deployment-level defaults (output
+	// dir, filename prefix, overwrite, inline payload guard) into the
+	// generation and edit tools; per-call MCP arguments still win via
+	// tools.resolveOutputPolicy.
 	imageOpts := []tools.HandlerOption{
 		tools.WithDefaultOutputDir(cfg.OutputDir),
 		tools.WithDefaultFilenamePrefix(cfg.FilenamePrefix),
@@ -66,86 +58,56 @@ func main() {
 		log.Fatalf("Failed to register MCP tools: %v", err)
 	}
 
-	// Create MCP handler
+	// MCP protocol handler with tools/list and tools/call wired in.
 	mcpHandler := protocol.NewMCPHandler()
-
-	// Register tools handlers
 	mcpHandler.RegisterToolsHandlers(
 		createToolsListHandler(toolManager),
 		createToolsCallHandler(toolManager),
 	)
 
-	// Set up signal handling for graceful shutdown
+	// Compose the server engine. The engine owns the recv loop, the
+	// worker pool, the bounded queue, and the cancellation/shutdown
+	// machinery; main only assembles dependencies and translates signals
+	// into ctx cancellation.
+	eng := server.New(
+		transport.NewStdio(),
+		mcpHandler,
+		server.Config{
+			MaxConcurrentRequests: cfg.MaxConcurrentRequests,
+			RequestQueueSize:      cfg.RequestQueueSize,
+			RequestTimeout:        cfg.RequestTimeout,
+			ShutdownTimeout:       cfg.ShutdownTimeout,
+		},
+		server.WithLogger(logger),
+		server.WithCancelRegistry(mcpHandler.Cancellations()),
+	)
+
+	// Bind SIGINT/SIGTERM to ctx cancellation so a graceful shutdown
+	// always flows through the engine's drain machinery (close work
+	// queue → wait for in-flight → close transport).
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
 	go func() {
-		<-sigChan
-		log.Println("Received shutdown signal")
+		sig := <-sigChan
+		logger.Info("server.signal_received", "signal", sig.String())
 		cancel()
 	}()
 
-	// Main message loop. The dispatch model is still serial in this commit;
-	// commit C4 introduces the dedicated server engine that turns this into
-	// a worker-pool driven loop.
-	log.Println("Vision MCP Server started")
-	if err := runMessageLoop(ctx, conn, mcpHandler); err != nil {
-		log.Fatalf("Message loop error: %v", err)
+	logger.Info("server.boot",
+		"workers", cfg.MaxConcurrentRequests,
+		"queue_size", cfg.RequestQueueSize,
+		"request_timeout", cfg.RequestTimeout.String(),
+		"shutdown_timeout", cfg.ShutdownTimeout.String(),
+		"log_level", cfg.LogLevel,
+		"log_format", cfg.LogFormat,
+	)
+	if err := eng.Run(ctx); err != nil {
+		logger.Error("server.exit", "err", err.Error())
+		os.Exit(1)
 	}
-	log.Println("Vision MCP Server stopped")
-}
-
-// runMessageLoop runs the main message processing loop.
-//
-// It is intentionally minimal at this stage; concurrent dispatch and
-// graceful in-flight draining live in [server.Server] (introduced later in
-// the refactor series). Keeping this loop single-goroutine for now means
-// each commit in the series independently builds and ships a working
-// binary.
-func runMessageLoop(ctx context.Context, conn transport.Connection, handler *protocol.MCPHandler) error {
-	for {
-		// Read message; ctx cancellation propagates through the connection.
-		data, err := conn.Read(ctx)
-		if err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
-				return nil
-			}
-			return fmt.Errorf("failed to read message: %w", err)
-		}
-
-		// Skip empty messages (defensive; the transport already filters
-		// pure-newline frames).
-		if len(data) == 0 {
-			continue
-		}
-
-		// Handle message. ctx propagates from the receive loop down so a
-		// shutdown signal interrupts in-flight work.
-		resp, err := handler.HandleMessage(ctx, data)
-		if err != nil {
-			log.Printf("Error handling message: %v", err)
-			continue
-		}
-
-		// Skip if no response (e.g., for notifications).
-		if resp == nil {
-			continue
-		}
-
-		// Encode and send response.
-		respData, err := protocol.EncodeResponse(resp)
-		if err != nil {
-			log.Printf("Error encoding response: %v", err)
-			continue
-		}
-
-		if err := conn.Write(ctx, respData); err != nil {
-			log.Printf("Error writing response: %v", err)
-		}
-	}
+	logger.Info("server.exit", "completed", eng.Completed(), "fallback", eng.FallbackCount())
 }
 
 // createToolsListHandler creates a handler for tools/list requests.
