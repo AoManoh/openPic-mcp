@@ -35,6 +35,23 @@ type MemoryConfig struct {
 	// cross-PID isolation. Tests use this to simulate multiple processes
 	// sharing one store. Production callers leave it 0 for os.Getpid.
 	PID int
+
+	// OnTransition is invoked under the write lock after Submit succeeds
+	// or any TransitionFn applies a non-nil mutation. The supplied Task
+	// is a deep copy that the hook may consume freely. Latency in the
+	// hook directly extends lock-held time, so disk implementations
+	// should keep it fast (single fsync + rename).
+	//
+	// Errors from the hook are intentionally not propagated — the
+	// in-memory mutation has already committed and reverting it would
+	// open a richer set of inconsistency scenarios than just logging the
+	// disk failure. Hooks must surface their own failures via logs/metrics.
+	OnTransition func(snapshot Task)
+
+	// OnEvict fires under the write lock when a terminal task is dropped
+	// from the retention window. Disk implementations use it to delete
+	// the corresponding manifest. Same constraints as OnTransition.
+	OnEvict func(id TaskID)
 }
 
 const (
@@ -66,22 +83,24 @@ type record struct {
 }
 
 // MemoryStore is the in-process [Store] implementation. It is the core
-// substrate; the disk store (T2) wraps it.
+// substrate; the disk store wraps it via the OnTransition / OnEvict hooks.
 //
 // The lock model is a single sync.RWMutex protecting the tasks map and
 // all per-record fields except `done` (which is closed exactly once
 // under the write lock and then read concurrently by Wait callers).
 type MemoryStore struct {
-	mu       sync.RWMutex
-	tasks    map[TaskID]*record
-	terminal terminalHeap // min-heap on FinishedAt for O(log N) eviction
-	queued   int          // counts records in StateQueued
-	running  int          // counts records in StateRunning
-	now      func() time.Time
-	pid      int
-	maxQueue int
-	maxRet   int
-	closed   atomic.Bool
+	mu           sync.RWMutex
+	tasks        map[TaskID]*record
+	terminal     terminalHeap // min-heap on FinishedAt for O(log N) eviction
+	queued       int          // counts records in StateQueued
+	running      int          // counts records in StateRunning
+	now          func() time.Time
+	pid          int
+	maxQueue     int
+	maxRet       int
+	onTransition func(Task)
+	onEvict      func(TaskID)
+	closed       atomic.Bool
 }
 
 // NewMemory constructs a MemoryStore. Configuration is clamped to the
@@ -97,12 +116,14 @@ func NewMemory(cfg MemoryConfig) *MemoryStore {
 		pid = os.Getpid()
 	}
 	return &MemoryStore{
-		tasks:    make(map[TaskID]*record),
-		terminal: terminalHeap{},
-		now:      now,
-		pid:      pid,
-		maxQueue: clamp(cfg.MaxQueued, defaultMaxQueued, hardUpperMaxQueued),
-		maxRet:   clamp(cfg.MaxRetained, defaultMaxRetained, hardUpperRetained),
+		tasks:        make(map[TaskID]*record),
+		terminal:     terminalHeap{},
+		now:          now,
+		pid:          pid,
+		maxQueue:     clamp(cfg.MaxQueued, defaultMaxQueued, hardUpperMaxQueued),
+		maxRet:       clamp(cfg.MaxRetained, defaultMaxRetained, hardUpperRetained),
+		onTransition: cfg.OnTransition,
+		onEvict:      cfg.OnEvict,
 	}
 }
 
@@ -154,6 +175,13 @@ func (s *MemoryStore) Submit(_ context.Context, kind Kind, req RequestSummary) (
 	}
 	s.tasks[id] = rec
 	s.queued++
+	if s.onTransition != nil {
+		// Disk persistence is best-effort: errors are surfaced through the
+		// hook itself (logs/metrics) so a failed manifest write never
+		// rejects an otherwise-valid in-memory submit. The in-memory state
+		// is the runtime source of truth; the manifest is recovery aid.
+		s.onTransition(rec.task.Clone())
+	}
 	return id, nil
 }
 
@@ -297,6 +325,9 @@ func (s *MemoryStore) Transition(_ context.Context, id TaskID, fn TransitionFn) 
 		}
 		s.applyStateChange(rec, prevState, rec.task.State)
 	}
+	if s.onTransition != nil {
+		s.onTransition(rec.task.Clone())
+	}
 	return nil
 }
 
@@ -342,11 +373,15 @@ func (s *MemoryStore) applyStateChange(rec *record, from, to State) {
 
 // evictUntilUnderRetention pops the oldest terminal records until the
 // terminal population is within MaxRetained. Must be called under the
-// write lock.
+// write lock. The OnEvict hook fires once per dropped record so disk
+// implementations can delete the corresponding manifest in lockstep.
 func (s *MemoryStore) evictUntilUnderRetention() {
 	for s.terminal.Len() > s.maxRet {
 		rec := heap.Pop(&s.terminal).(*record)
 		delete(s.tasks, rec.task.ID)
+		if s.onEvict != nil {
+			s.onEvict(rec.task.ID)
+		}
 	}
 }
 
@@ -423,6 +458,76 @@ func (s *MemoryStore) RegisterCancel(id TaskID, cancel context.CancelFunc) error
 // ErrStoreClosed; Get/List/Wait still work.
 func (s *MemoryStore) Close() error {
 	s.closed.Store(true)
+	return nil
+}
+
+// restore inserts a task verbatim from an external source (the disk
+// replay path). It deliberately bypasses Submit's StateQueued constraint,
+// the closed flag, and BOTH lifecycle hooks: replay is a load operation,
+// not a state transition, and firing hooks here would re-emit the very
+// manifest the caller just read.
+//
+// Callers MUST ensure the supplied Task has a valid ID and Kind. The
+// store does field-level validation but not semantic checks (e.g. it
+// will not refuse a task whose CancelHint is contradictory to State —
+// that is the caller's job).
+//
+// Cross-PID records are accepted and retained as foreign: List default
+// hides them, and Cancel/Transition will return ErrCrossPID so peers
+// cannot mutate each other's records.
+func (s *MemoryStore) restore(t Task) error {
+	if !t.ID.IsValid() {
+		return fmt.Errorf("taskstore: restore invalid id %q", t.ID)
+	}
+	if !t.Kind.IsValid() {
+		return fmt.Errorf("taskstore: restore invalid kind %q", t.Kind)
+	}
+	switch t.State {
+	case StateQueued, StateRunning,
+		StateCompleted, StateFailed, StateCancelled, StateAbandoned:
+		// ok
+	default:
+		return fmt.Errorf("taskstore: restore invalid state %q", t.State)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.tasks[t.ID]; exists {
+		return fmt.Errorf("taskstore: restore duplicate id %q", t.ID)
+	}
+	rec := &record{
+		task:   t.Clone(),
+		done:   make(chan struct{}),
+		heapIx: -1,
+	}
+	s.tasks[t.ID] = rec
+
+	switch t.State {
+	case StateQueued:
+		// Foreign-PID queued tasks still increment our counter so the
+		// MaxQueued admission check stays honest. They cannot be
+		// promoted to running by our dispatcher (cross-PID rejection)
+		// but they should still consume slots until Transition/eviction
+		// removes them.
+		s.queued++
+	case StateRunning:
+		s.running++
+	default:
+		// Terminal state — ensure FinishedAt is set, push onto the
+		// retention heap, close the waiter channel, and trim if the
+		// retention bound is now exceeded. The trim path here does NOT
+		// fire OnEvict because replay is a pure load.
+		if rec.task.FinishedAt.IsZero() {
+			rec.task.FinishedAt = s.now()
+		}
+		heap.Push(&s.terminal, rec)
+		close(rec.done)
+		for s.terminal.Len() > s.maxRet {
+			evict := heap.Pop(&s.terminal).(*record)
+			delete(s.tasks, evict.task.ID)
+		}
+	}
 	return nil
 }
 
