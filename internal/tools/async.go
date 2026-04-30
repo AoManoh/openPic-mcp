@@ -157,8 +157,33 @@ func SubmitImageTaskHandler(store taskstore.Store, dispatcher taskDispatcher) ty
 		if !ok {
 			return errorResult("params must be a JSON object matching the underlying sync tool's schema"), nil
 		}
+		// Per-kind synchronous validation. submit must reject obviously
+		// malformed payloads up-front so callers don't get a task_id
+		// back for a request that's guaranteed to fail at worker time
+		// (which would waste a worker slot and force a second RPC to
+		// observe the failure). The underlying generate_image /
+		// edit_image handlers still re-validate the full schema; here
+		// we only catch the fields that are always required for the
+		// chosen kind. Keeping this list narrow avoids drift between
+		// the two validation layers.
 		if prompt := stringArg(params, "prompt"); prompt == "" {
 			return errorResult("params.prompt is required and must be a non-empty string"), nil
+		}
+		if kind == taskstore.KindEditImage {
+			if image := stringArg(params, "image"); image == "" {
+				return errorResult("params.image is required for edit_image and must be a string (file path, URL, data URI, or raw base64)"), nil
+			}
+		}
+		// Defense-in-depth enum check (R5 follow-up). The schema also
+		// advertises this enum, but JSON-RPC clients vary in how
+		// strictly they enforce schemas; catching it here means the
+		// caller gets a fielded error in the same submit round-trip
+		// rather than a fall-through file_path response surprise after
+		// 90 seconds of work.
+		if rf := stringArg(params, "response_format"); rf != "" {
+			if err := validateResponseFormat(rf); err != nil {
+				return errorResult("params." + err.Error()), nil
+			}
 		}
 
 		summary := buildRequestSummaryFromParams(kind, params)
@@ -238,8 +263,17 @@ func GetTaskResultHandler(store taskstore.Store) types.ToolHandler {
 			if parsed < 0 {
 				return errorResult("wait must be non-negative"), nil
 			}
+			// Hard upper bound. The previous behaviour silently clamped
+			// values >5m to 5m, but that violated the documented
+			// "Maximum 5m" contract: callers passing wait="10m"
+			// reasonably expected either to wait 10 minutes or to be
+			// told the value was rejected. Silently truncating is the
+			// worst of both worlds — symmetric with the negative-wait
+			// rejection above, this is now a hard error.
 			if parsed > 5*time.Minute {
-				parsed = 5 * time.Minute
+				return errorResult(fmt.Sprintf(
+					"wait must be <= 5m (got %s); long-poll budget caps at 5 minutes — re-poll if you need more time",
+					parsed)), nil
 			}
 			wait = parsed
 		}

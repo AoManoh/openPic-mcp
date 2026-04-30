@@ -139,6 +139,115 @@ func TestSubmitImageTask_RejectsMissingParamsObject(t *testing.T) {
 	}
 }
 
+// TestSubmitImageTask_EditImageRejectsMissingImage is the regression
+// test for R7 from the 5th-round stress report. The previous behaviour
+// only validated `params.prompt` synchronously, so an edit_image
+// submission with prompt-only payload would return a task_id and only
+// fail later inside the worker — wasting a worker slot and forcing a
+// second RPC to observe the error. This test pins that the missing
+// image is now caught at submit time, symmetric with the prompt
+// check, so callers get a single, fielded error in the same
+// round-trip.
+func TestSubmitImageTask_EditImageRejectsMissingImage(t *testing.T) {
+	store := taskstore.NewMemory(taskstore.MemoryConfig{})
+	disp := &stubDispatcher{}
+	h := SubmitImageTaskHandler(store, disp)
+
+	res, _ := h(context.Background(), map[string]any{
+		"kind": "edit_image",
+		"params": map[string]any{
+			"prompt": "a smile",
+			// image deliberately omitted
+		},
+	})
+	if !res.IsError {
+		t.Fatal("expected IsError when image is missing for edit_image")
+	}
+	if !strings.Contains(res.Content[0].Text, "params.image is required") {
+		t.Errorf("error must point at params.image, got %q", res.Content[0].Text)
+	}
+	// The dispatcher must NOT have been called: submit-time rejection
+	// is the whole point of R7.
+	if len(disp.calls) != 0 {
+		t.Errorf("dispatcher.Dispatch was called %d times; expected 0", len(disp.calls))
+	}
+}
+
+// TestSubmitImageTask_EditImageAcceptsWithImage is the symmetric
+// happy-path: an edit_image submission carrying both prompt and image
+// must be accepted and reach the dispatcher. This guards against an
+// over-zealous regression that would also reject valid payloads.
+func TestSubmitImageTask_EditImageAcceptsWithImage(t *testing.T) {
+	store := taskstore.NewMemory(taskstore.MemoryConfig{})
+	disp := &stubDispatcher{}
+	h := SubmitImageTaskHandler(store, disp)
+
+	res, _ := h(context.Background(), map[string]any{
+		"kind": "edit_image",
+		"params": map[string]any{
+			"prompt": "a smile",
+			"image":  "/tmp/cat.png",
+		},
+	})
+	if res.IsError {
+		t.Fatalf("expected success, got error: %s", res.Content[0].Text)
+	}
+	if len(disp.calls) != 1 {
+		t.Errorf("dispatcher.Dispatch should have been called once; got %d", len(disp.calls))
+	}
+}
+
+// TestSubmitImageTask_RejectsInvalidResponseFormat is the R5
+// defense-in-depth regression: even though the schema advertises the
+// `response_format` enum, the runtime must also reject unknown values.
+// Without this guard an unknown response_format silently fell through
+// to the file_path branch in the underlying handler — meaning a
+// submission with response_format="banana" would queue successfully
+// and only the get_task_result caller would notice the mismatch
+// 90 seconds later (after a real upstream call had already happened).
+func TestSubmitImageTask_RejectsInvalidResponseFormat(t *testing.T) {
+	store := taskstore.NewMemory(taskstore.MemoryConfig{})
+	disp := &stubDispatcher{}
+	h := SubmitImageTaskHandler(store, disp)
+
+	res, _ := h(context.Background(), map[string]any{
+		"kind": "generate_image",
+		"params": map[string]any{
+			"prompt":          "a cat",
+			"response_format": "banana",
+		},
+	})
+	if !res.IsError {
+		t.Fatal("expected IsError on unknown response_format")
+	}
+	if !strings.Contains(res.Content[0].Text, "response_format") {
+		t.Errorf("error must mention response_format, got %q", res.Content[0].Text)
+	}
+	if len(disp.calls) != 0 {
+		t.Errorf("dispatcher must not be called for invalid enum; got %d calls", len(disp.calls))
+	}
+}
+
+// TestSubmitImageTask_GenerateImageDoesNotRequireImage protects against
+// an over-broad fix that would accidentally require `image` for
+// generate_image too. generate_image legitimately has no image input.
+func TestSubmitImageTask_GenerateImageDoesNotRequireImage(t *testing.T) {
+	store := taskstore.NewMemory(taskstore.MemoryConfig{})
+	disp := &stubDispatcher{}
+	h := SubmitImageTaskHandler(store, disp)
+
+	res, _ := h(context.Background(), map[string]any{
+		"kind": "generate_image",
+		"params": map[string]any{
+			"prompt": "a cat",
+			// no image, and that's correct for generate_image
+		},
+	})
+	if res.IsError {
+		t.Fatalf("generate_image without image should succeed, got error: %s", res.Content[0].Text)
+	}
+}
+
 func TestSubmitImageTask_DispatchFailureRollsToFailed(t *testing.T) {
 	store := taskstore.NewMemory(taskstore.MemoryConfig{})
 	disp := &stubDispatcher{failNext: ErrDispatcherQueueFull}
@@ -278,6 +387,91 @@ func TestGetTaskResult_RejectsBadDuration(t *testing.T) {
 	})
 	if !res.IsError {
 		t.Fatal("expected IsError")
+	}
+}
+
+// TestGetTaskResult_RejectsNegativeWait pins the negative-wait branch:
+// passing a negative duration must produce a hard error rather than
+// being silently coerced to zero. This is the symmetric counterpart of
+// the >5m rejection below.
+func TestGetTaskResult_RejectsNegativeWait(t *testing.T) {
+	store := taskstore.NewMemory(taskstore.MemoryConfig{})
+	h := GetTaskResultHandler(store)
+	res, _ := h(context.Background(), map[string]any{
+		"task_id": "tsk_1_20260101T000000.000000000Z_aaaaaaaa",
+		"wait":    "-1s",
+	})
+	if !res.IsError {
+		t.Fatal("expected IsError on negative wait")
+	}
+	if !strings.Contains(res.Content[0].Text, "non-negative") {
+		t.Errorf("unexpected error text: %q", res.Content[0].Text)
+	}
+}
+
+// TestGetTaskResult_RejectsWaitOver5Minutes is the regression test for
+// R3 from the 5th-round stress report. The previous implementation
+// silently clamped wait>5m to 5m, violating the documented "Maximum
+// 5m" contract. The fix turns this into a hard error symmetric with
+// the negative-wait rejection. We pin both the IsError flag and the
+// substring "<= 5m" so a future refactor cannot accidentally restore
+// the clamp without also rewording the message.
+func TestGetTaskResult_RejectsWaitOver5Minutes(t *testing.T) {
+	store := taskstore.NewMemory(taskstore.MemoryConfig{})
+	h := GetTaskResultHandler(store)
+	cases := []string{"5m1s", "6m", "10m", "1h"}
+	for _, w := range cases {
+		t.Run(w, func(t *testing.T) {
+			res, _ := h(context.Background(), map[string]any{
+				"task_id": "tsk_1_20260101T000000.000000000Z_aaaaaaaa",
+				"wait":    w,
+			})
+			if !res.IsError {
+				t.Fatalf("wait=%s: expected IsError", w)
+			}
+			text := res.Content[0].Text
+			if !strings.Contains(text, "<= 5m") {
+				t.Errorf("wait=%s: error must contain '<= 5m', got %q", w, text)
+			}
+			if !strings.Contains(text, w) {
+				// The message echoes the offending value so callers
+				// can confirm what was rejected.
+				t.Errorf("wait=%s: error must echo the rejected value, got %q", w, text)
+			}
+		})
+	}
+}
+
+// TestGetTaskResult_AcceptsExactly5Minutes pins the boundary: 5m
+// itself is still a valid budget. This protects against an off-by-one
+// regression where someone tightens the check to >=5m. We can't
+// actually wait 5 minutes in a unit test, so we drive the task to a
+// terminal state through the legal state machine
+// (queued → running → completed) before invoking the handler — Wait
+// then returns the snapshot synchronously instead of subscribing.
+func TestGetTaskResult_AcceptsExactly5Minutes(t *testing.T) {
+	store := taskstore.NewMemory(taskstore.MemoryConfig{})
+	id, _ := store.Submit(context.Background(), taskstore.KindGenerateImage, taskstore.RequestSummary{Prompt: "p"})
+	if err := store.Transition(context.Background(), id, func(tk *taskstore.Task) error {
+		tk.State = taskstore.StateRunning
+		return nil
+	}); err != nil {
+		t.Fatalf("queued → running: %v", err)
+	}
+	if err := store.Transition(context.Background(), id, func(tk *taskstore.Task) error {
+		tk.State = taskstore.StateCompleted
+		return nil
+	}); err != nil {
+		t.Fatalf("running → completed: %v", err)
+	}
+
+	h := GetTaskResultHandler(store)
+	res, _ := h(context.Background(), map[string]any{
+		"task_id": string(id),
+		"wait":    "5m",
+	})
+	if res.IsError {
+		t.Fatalf("wait=5m should be accepted, got error: %s", res.Content[0].Text)
 	}
 }
 

@@ -89,3 +89,29 @@ func validateOutputFormat(value string) error {
 	}
 	return nil
 }
+
+// supportedResponseFormats lists the MCP-side delivery shapes the image
+// tools understand. This is purely an MCP contract — openPic-mcp never
+// forwards response_format to the upstream image API (see capabilities.go
+// for the rationale). The values are duplicated in generate.go and
+// edit.go schemas; keeping a single source of truth here lets the
+// runtime validator below stay in lockstep with the advertised enum.
+var supportedResponseFormats = []string{"file_path", "url", "b64_json"}
+
+// validateResponseFormat is the defense-in-depth check for the
+// response_format enum. The schema already advertises the allowed
+// values, but JSON-RPC clients vary in how strictly they enforce
+// schemas — IDE 5th-round stress test report (R5 follow-up) found
+// that an unknown response_format would silently fall through to the
+// file_path branch, masking the typo. Catching it here gives callers
+// a fielded error symmetric with the unsupported size / aspect_ratio
+// / output_format messages.
+func validateResponseFormat(value string) error {
+	if value == "" {
+		return nil
+	}
+	if !containsString(supportedResponseFormats, value) {
+		return fmt.Errorf("unsupported response_format %q: expected one of %v", value, supportedResponseFormats)
+	}
+	return nil
+}

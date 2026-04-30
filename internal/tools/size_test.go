@@ -87,6 +87,32 @@ func TestValidateOutputFormat(t *testing.T) {
 	}
 }
 
+// TestValidateResponseFormat is the R5 follow-up regression: every
+// value the schema advertises in the response_format enum must be
+// accepted, every other value must be rejected with a fielded error.
+// Empty stays valid so existing callers that omit the field continue
+// to get the default (file_path).
+func TestValidateResponseFormat(t *testing.T) {
+	if err := validateResponseFormat(""); err != nil {
+		t.Errorf("empty response_format must be valid: %v", err)
+	}
+	for _, value := range supportedResponseFormats {
+		if err := validateResponseFormat(value); err != nil {
+			t.Errorf("%q should be valid: %v", value, err)
+		}
+	}
+	for _, value := range []string{"banana", "stream", "json", "binary", "FILE_PATH"} {
+		err := validateResponseFormat(value)
+		if err == nil {
+			t.Errorf("%q must be rejected", value)
+			continue
+		}
+		if !strings.Contains(err.Error(), "unsupported response_format") {
+			t.Errorf("error for %q must mention 'unsupported response_format', got %v", value, err)
+		}
+	}
+}
+
 func TestGenerateImageHandler_AspectRatioMapsToSize(t *testing.T) {
 	mockProvider := &mockVisionProvider{
 		generateResult: &provider.GenerateImageResponse{

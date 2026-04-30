@@ -101,6 +101,9 @@ func GenerateImageHandler(imageProvider provider.ImageProvider, opts ...HandlerO
 		}
 
 		responseFormat := stringArg(args, "response_format")
+		if err := validateResponseFormat(responseFormat); err != nil {
+			return errorResult(err.Error()), nil
+		}
 		if responseFormat == "" {
 			responseFormat = defaultImageResponseFormat
 		}

@@ -387,7 +387,7 @@ queued ──► abandoned  (shutdown 时尚未派发)
 | 工具 | 入参 | 返回 | 用途 |
 |------|------|------|------|
 | `submit_image_task` | `kind` (`generate_image`/`edit_image`) + `params`（与同步工具同 schema） | `{task_id, state, submitted_at}` | 立即返回，不阻塞会话 |
-| `get_task_result` | `task_id` + 可选 `wait`（Go duration，最大 5m） | 完整 `Task`（状态+结果+错误+时间戳） | `wait=0s` 立即快照；`wait>0` long-poll 至终态或超时 |
+| `get_task_result` | `task_id` + 可选 `wait`（Go duration，**严格 ≤ 5m，超出硬报错**） | 完整 `Task`（状态+结果+错误+时间戳） | `wait=0s` 立即快照；`wait>0` long-poll 至终态或超时；超过 5m 的预算请通过重新轮询拼接 |
 | `list_tasks` | 可选 `states[]` / `kinds[]` / `since` (RFC3339) / `all` | `{tasks, count}` | 默认仅本进程任务；`all=true` 包含其他 PID 残留 |
 | `cancel_task` | `task_id` + 可选 `hint` | 取消后的 `Task` | 跨 PID 拒绝；终态任务返回当前快照不变 |
 
@@ -447,6 +447,35 @@ shutdown 时引擎按以下顺序协同：
 7. 调 `taskStore.Close()` 标记关闭。
 
 任务持久化让客户端在下次启动后还能 `get_task_result` 看到 `state=abandoned`，避免悬挂。
+
+### 上游链路与取消语义
+
+`cancel_task` 在 MCP 层是**确定性的**：调用成功后，本进程的 dispatcher 立即把任务状态置为 `cancelled`、关闭其 `ctx`、释放 worker 槽。同步工具 (`describe_image` / `compare_images` / `generate_image` / `edit_image`) 全部使用 `http.NewRequestWithContext(ctx, …)`，因此 ctx 取消会立刻关闭与上游 (`OPENPIC_API_BASE_URL`) 的 TCP 连接。
+
+但 **"取消是否会节省上游配额"取决于上游服务的实现**，本项目不做承诺：
+
+| 上游形态 | 收到客户端断连后是否会取消上游计算 / 配额 |
+|---------|------------------------------------------|
+| OpenAI 官方 `/v1/images/*` | OpenAI 官方未公开声明 client-disconnect 是否会回滚配额；保守假设：**不会**。 |
+| OpenAI-Compatible 网关（如 sub2api） | 网关本身有内部 retry / failover；客户端断连**不一定**传播到上游 OpenAI 调用。许多代理实现会等待上游响应后再决定是否计费。 |
+| OAuth 凭证池代理（如 CLIProxyAPI） | 代理收到客户端断连后行为依赖具体实现；外部观察不到的副作用是常态。 |
+
+**结论与建议：**
+
+- 把 `cancel_task` 看作"在 MCP 这一层立刻释放本地资源（worker 槽 / 内存 / store 配额）"的工具，而不是一个**节流上游配额**的工具。
+- 如果担心上游计费，第一选择仍然是**避免发起昂贵请求**（通过 `list_image_capabilities` 查看模型边界、或本地参数校验 fail-fast），其次才是 `cancel_task`。
+
+### 长耗时调用的超时与上游异常
+
+实测：在 `gpt-image-2` 路径上，sub2api 的 `/v1/images/edits` 单次延迟普遍在 70-220 秒；当上游 503 触发 failover 时整体延迟还会叠加。某些复合 prompt（例如 panoramic 2048×2048）可能超过 5 分钟。
+
+| 现象 | 责任层 | 治理位置 |
+|------|--------|---------|
+| 上游网关 (`Client.Timeout exceeded while awaiting headers`) | 上游服务 / 网络 | 调高 `OPENPIC_TIMEOUT`（注意：这是 **HTTP client** 超时，不是 `OPENPIC_REQUEST_TIMEOUT` 的 MCP 工具调用预算） |
+| `tools/call` 在 `OPENPIC_REQUEST_TIMEOUT` 触发取消 | 本服务（设计） | 调高 `OPENPIC_REQUEST_TIMEOUT`，或用异步 `submit_image_task` + `get_task_result(wait="5m")` 解耦客户端等待 |
+| 上游已完成但客户端已断连 | 上游服务 | MCP 层无法补救；**用异步任务模型可以救一次**——任务状态在服务端持久化，客户端重连后用 `get_task_result(task_id)` 仍能取到最终结果 |
+
+**最佳实践**：对所有可能 > 30 秒的图像请求，使用 `submit_image_task` 而非同步 `generate_image`。这样即便客户端因 IDE 重启 / 网络抖动 / 5 分钟 long-poll 上限断开，也能在重连后通过 `task_id` 拿回结果。
 
 ## API/工具说明
 
