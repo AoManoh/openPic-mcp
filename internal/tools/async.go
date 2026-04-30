@@ -84,9 +84,38 @@ var GetTaskResultTool = types.Tool{
 	},
 }
 
+// listTasksStateEnum is the set of task states list_tasks accepts as a
+// filter. It is built once at package load from the canonical State
+// constants in package taskstore so a future state addition cannot
+// silently drift between the schema and the runtime validator
+// (buildListFilter / validState below). The order mirrors the task
+// lifecycle so MCP clients see a deterministic and documentable list.
+var listTasksStateEnum = []string{
+	string(taskstore.StateQueued),
+	string(taskstore.StateRunning),
+	string(taskstore.StateCompleted),
+	string(taskstore.StateFailed),
+	string(taskstore.StateCancelled),
+	string(taskstore.StateAbandoned),
+}
+
+// listTasksKindEnum mirrors taskstore.Kind for the same reason as
+// listTasksStateEnum: schema-side enum and runtime IsValid() must
+// share a single source of truth.
+var listTasksKindEnum = []string{
+	string(taskstore.KindGenerateImage),
+	string(taskstore.KindEditImage),
+}
+
 // ListTasksTool returns a filtered snapshot of tasks. By default only
 // tasks owned by the current process are visible; pass all=true to
 // include foreign-PID manifests left over by previous server processes.
+//
+// Schema note: `states` and `kinds` are arrays whose `items` schema is
+// fully populated — strict MCP clients (Windsurf, in particular) reject
+// any array property that omits `items`. The schema_test.go suite walks
+// every tool in this package to enforce this invariant; do not delete
+// the Items blocks below without also revisiting that test.
 var ListTasksTool = types.Tool{
 	Name: "list_tasks",
 	Description: "List tasks, sorted by submitted_at ascending. By default only tasks owned by this server process are " +
@@ -97,10 +126,18 @@ var ListTasksTool = types.Tool{
 			"states": {
 				Type:        "array",
 				Description: "Optional filter on task state. Any of queued/running/completed/failed/cancelled/abandoned.",
+				Items: &types.Property{
+					Type: "string",
+					Enum: listTasksStateEnum,
+				},
 			},
 			"kinds": {
 				Type:        "array",
 				Description: "Optional filter on task kind. Any of generate_image/edit_image.",
+				Items: &types.Property{
+					Type: "string",
+					Enum: listTasksKindEnum,
+				},
 			},
 			"since": {
 				Type:        "string",

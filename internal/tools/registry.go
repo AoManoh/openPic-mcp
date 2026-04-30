@@ -121,3 +121,34 @@ func RegisterAll(manager *tool.Manager, vp provider.VisionProvider, ip provider.
 	}
 	return nil
 }
+
+// allKnownTools returns every tool definition this package can register,
+// flattened across the sync (always-on) and async (gated on AsyncBundle)
+// surfaces. It is the single source of truth consumed by schema_test.go
+// so that adding a new tool to RegisterAll without also schema-validating
+// it surfaces as a test failure.
+//
+// CONTRACT — when you add a new exported `var FooTool = types.Tool{...}`:
+//
+//  1. Wire it into RegisterAll above (sync slice or async slice).
+//  2. Append it here in the SAME group order.
+//
+// The meta-test TestAllKnownToolsCoversRegisterAll walks the bindings
+// list above by calling RegisterAll with stub providers and an enabled
+// async bundle, then asserts the registered names equal the names
+// returned here. That guarantees the two lists cannot drift.
+func allKnownTools() []types.Tool {
+	return []types.Tool{
+		// Sync tools — always registered.
+		DescribeImageTool,
+		CompareImagesTool,
+		GenerateImageTool,
+		EditImageTool,
+		ListImageCapabilitiesTool,
+		// Async tools — registered when an AsyncBundle is provided.
+		SubmitImageTaskTool,
+		GetTaskResultTool,
+		ListTasksTool,
+		CancelTaskTool,
+	}
+}
