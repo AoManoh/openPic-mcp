@@ -42,7 +42,10 @@ var SubmitImageTaskTool = types.Tool{
 	Name: "submit_image_task",
 	Description: "Submit an image generation or edit task for asynchronous execution. Returns a task_id immediately; " +
 		"poll get_task_result or list_tasks to retrieve the outcome. Use this for long-running prompts that would otherwise " +
-		"block the conversation.",
+		"block the conversation — recommended for any request that may exceed ~30 seconds (e.g. 2048x2048 with complex " +
+		"prompts, edit_image with reference images, or any call near the upstream OPENPIC_TIMEOUT). The task survives " +
+		"client disconnects and IDE restarts (manifest is persisted to disk by default), so a later get_task_result " +
+		"by task_id can still retrieve the final result.",
 	InputSchema: types.InputSchema{
 		Type: "object",
 		Properties: map[string]types.Property{
@@ -153,10 +156,22 @@ var ListTasksTool = types.Tool{
 
 // CancelTaskTool requests cancellation of a queued or running task.
 // Cross-PID cancellation is rejected at the store layer.
+//
+// Description note: the cancel-vs-quota disclosure here is the
+// canonical surface for LLM agents — they don't read README. The
+// wording mirrors the "上游链路与取消语义" section in README so the
+// two stay in sync.
 var CancelTaskTool = types.Tool{
 	Name: "cancel_task",
 	Description: "Cancel a queued or running task. Returns the cancelled task. Already-terminal tasks return their current " +
-		"snapshot unchanged.",
+		"snapshot unchanged. " +
+		"NOTE on upstream quota: cancelling closes openPic-mcp's HTTP connection to the upstream API immediately " +
+		"(ctx is bound end-to-end via http.NewRequestWithContext), so local resources (worker slot, store quota) are " +
+		"freed deterministically. However, whether the upstream provider rolls back its compute / billing on " +
+		"client-disconnect is implementation-dependent: official OpenAI does not document a rollback guarantee, and " +
+		"OpenAI-compatible proxies (sub2api, CLIProxyAPI, etc.) typically wait for the upstream response before " +
+		"deciding to charge. Do not rely on cancel_task to save upstream quota; use it to release local slots and " +
+		"abandon work the caller no longer needs.",
 	InputSchema: types.InputSchema{
 		Type: "object",
 		Properties: map[string]types.Property{

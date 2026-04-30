@@ -135,3 +135,102 @@ func TestListImageCapabilitiesTool_HasNoArgs(t *testing.T) {
 		t.Error("tool must reject unknown properties to keep the contract tight")
 	}
 }
+
+// TestImageCapabilities_SizeReliabilityNotes_NotEmpty pins the
+// observation-1 follow-up: list_image_capabilities must surface a
+// non-empty advisory string about size reliability under
+// OPENPIC_TIMEOUT, so LLM agents auto-selecting a size can see the
+// caveat without reading README.
+//
+// The test also pins the deliberate non-recommendation: openPic-mcp
+// supports many upstream providers with different reliability
+// envelopes, so the field must not bake a specific number like
+// "1024x1536" into the contract. We assert the absence of a
+// recommendation pattern alongside the presence of the principle.
+func TestImageCapabilities_SizeReliabilityNotes_NotEmpty(t *testing.T) {
+	handler := ListImageCapabilitiesHandler()
+	result, err := handler(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	var caps ImageCapabilities
+	if err := json.Unmarshal([]byte(result.Content[0].Text), &caps); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if caps.SizeReliabilityNotes == "" {
+		t.Fatal("size_reliability_notes must not be empty — LLM agents need this to make timeout-aware size choices")
+	}
+
+	// Advisory must reference OPENPIC_TIMEOUT and the async escape
+	// hatch (submit_image_task), since those are the actionable
+	// remedies the agent can take.
+	for _, token := range []string{"OPENPIC_TIMEOUT", "submit_image_task"} {
+		if !strings.Contains(caps.SizeReliabilityNotes, token) {
+			t.Errorf("size_reliability_notes must reference %q so callers know the remedy: %q",
+				token, caps.SizeReliabilityNotes)
+		}
+	}
+
+	// Anti-recommendation pin: the field must NOT prescribe a
+	// specific maximum size with an imperative verb (e.g. "use
+	// 1024x1536"). Reliability is upstream-dependent and openPic-mcp
+	// must not pretend otherwise. We look for "<imperative> <specific
+	// size>" patterns rather than the bare phrase "recommended max
+	// size", so the field can still legitimately use that phrase to
+	// describe what it does NOT do (which is itself a useful signal).
+	imperativePrefixes := []string{"use ", "set size to ", "stick to "}
+	specificSizes := []string{"1024x1024", "1024x1536", "1536x1024", "2048x2048"}
+	lowerNotes := strings.ToLower(caps.SizeReliabilityNotes)
+	for _, prefix := range imperativePrefixes {
+		for _, sz := range specificSizes {
+			needle := prefix + sz
+			if strings.Contains(lowerNotes, needle) {
+				t.Errorf("size_reliability_notes must not prescribe a specific size with an imperative; "+
+					"openPic-mcp supports multiple upstreams with different reliability envelopes. "+
+					"forbidden pattern %q matched: %q", needle, caps.SizeReliabilityNotes)
+			}
+		}
+	}
+}
+
+// TestCancelTaskTool_DescriptionDocumentsQuotaSemantics is the
+// observation-2 regression. The README has the quota disclosure but
+// LLM agents only read tool schemas; this test pins that the cancel
+// quota caveat is also part of the schema-level Description so an
+// agent considering cancel_task to "save quota" gets the truth.
+func TestCancelTaskTool_DescriptionDocumentsQuotaSemantics(t *testing.T) {
+	desc := CancelTaskTool.Description
+	if desc == "" {
+		t.Fatal("cancel_task description must not be empty")
+	}
+	for _, token := range []string{"upstream", "quota"} {
+		if !strings.Contains(strings.ToLower(desc), token) {
+			t.Errorf("cancel_task description must mention %q: %q", token, desc)
+		}
+	}
+	// Pin the negative claim so a future doc rewrite can't accidentally
+	// over-promise quota savings.
+	for _, token := range []string{"do not rely", "implementation-dependent"} {
+		if !strings.Contains(strings.ToLower(desc), token) {
+			t.Errorf("cancel_task description must include the negative-claim phrase %q: %q", token, desc)
+		}
+	}
+}
+
+// TestSubmitImageTaskTool_DescriptionRecommendsAsyncForLongRequests
+// pins the observation-2 follow-up: when describing the async tool,
+// the schema must guide LLM agents to use it for any request that
+// might exceed the synchronous tools/call timeout, so they don't
+// default to synchronous generate_image / edit_image for risky calls.
+func TestSubmitImageTaskTool_DescriptionRecommendsAsyncForLongRequests(t *testing.T) {
+	desc := SubmitImageTaskTool.Description
+	if desc == "" {
+		t.Fatal("submit_image_task description must not be empty")
+	}
+	for _, token := range []string{"OPENPIC_TIMEOUT", "client disconnect", "task_id"} {
+		if !strings.Contains(desc, token) {
+			t.Errorf("submit_image_task description must mention %q: %q", token, desc)
+		}
+	}
+}

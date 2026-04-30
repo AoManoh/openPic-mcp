@@ -16,7 +16,7 @@ import (
 // tool layer's contract with the upstream API.
 var ListImageCapabilitiesTool = types.Tool{
 	Name:        "list_image_capabilities",
-	Description: "List the size, aspect_ratio, output_format and response_format values currently accepted by generate_image and edit_image, plus a note on upstream forwarding behaviour.",
+	Description: "List the size, aspect_ratio, output_format and response_format values currently accepted by generate_image and edit_image, plus notes on upstream forwarding behaviour and size reliability under OPENPIC_TIMEOUT.",
 	InputSchema: types.InputSchema{
 		Type:                 "object",
 		Properties:           map[string]types.Property{},
@@ -41,6 +41,14 @@ type ImageCapabilities struct {
 	MaxImageResultsPerCall          int               `json:"max_image_results_per_call"`
 	UpstreamResponseFormatOmitted   bool              `json:"upstream_response_format_omitted"`
 	UpstreamResponseFormatRationale string            `json:"upstream_response_format_rationale"`
+	// SizeReliabilityNotes is an advisory string aimed at LLM agents
+	// auto-selecting a size from the Sizes enum. It states the
+	// principle ("largest sizes can exceed timeout for complex
+	// prompts") rather than a hardcoded recommendation, because
+	// upstream-side reliability varies between OpenAI-compatible
+	// providers (sub2api, official OpenAI, CLIProxyAPI, etc.) and
+	// hardcoding a number here would be wrong on most of them.
+	SizeReliabilityNotes string `json:"size_reliability_notes"`
 }
 
 // ListImageCapabilitiesHandler returns a handler that emits the static
@@ -64,6 +72,7 @@ func ListImageCapabilitiesHandler() types.ToolHandler {
 			MaxImageResultsPerCall:          maxImageResults,
 			UpstreamResponseFormatOmitted:   true,
 			UpstreamResponseFormatRationale: "openPic-mcp never forwards response_format to /v1/images/generations or /v1/images/edits; GPT image models always return b64_json and several OpenAI-compatible proxies reject the field.",
+			SizeReliabilityNotes:            "All sizes in the 'sizes' enum are accepted by the upstream API, but the largest values (e.g. 2048x2048) routinely exceed OPENPIC_TIMEOUT for complex prompts on slower OpenAI-compatible proxies. If you observe 'Client.Timeout exceeded while awaiting headers', either raise OPENPIC_TIMEOUT, fall back to a smaller size, or use submit_image_task to decouple from the synchronous tools/call budget. openPic-mcp deliberately does not bake a recommended max size into this field because reliability varies between upstream providers (official OpenAI, sub2api, CLIProxyAPI, etc.) and any single number would be wrong for most deployments.",
 		}
 
 		body, err := json.MarshalIndent(caps, "", "  ")

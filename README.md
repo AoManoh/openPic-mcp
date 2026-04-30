@@ -388,7 +388,7 @@ queued ──► abandoned  (shutdown 时尚未派发)
 |------|------|------|------|
 | `submit_image_task` | `kind` (`generate_image`/`edit_image`) + `params`（与同步工具同 schema） | `{task_id, state, submitted_at}` | 立即返回，不阻塞会话 |
 | `get_task_result` | `task_id` + 可选 `wait`（Go duration，**严格 ≤ 5m，超出硬报错**） | 完整 `Task`（状态+结果+错误+时间戳） | `wait=0s` 立即快照；`wait>0` long-poll 至终态或超时；超过 5m 的预算请通过重新轮询拼接 |
-| `list_tasks` | 可选 `states[]` / `kinds[]` / `since` (RFC3339) / `all` | `{tasks, count}` | 默认仅本进程任务；`all=true` 包含其他 PID 残留 |
+| `list_tasks` | 可选 `states[]` / `kinds[]` / `since` (RFC3339) / `all` | `{tasks, count}` | 默认仅本进程任务；`all=true` 包含其他 PID 残留。**响应体量上限**：未过滤时受 `OPENPIC_TASK_MAX_RETAINED` 约束（默认 1024 → ~1.3 MB，硬上限 100000 → ~10 MB）；MCP stdio 不流式，建议高任务量场景下用 `since` / `states` 过滤分桶 |
 | `cancel_task` | `task_id` + 可选 `hint` | 取消后的 `Task` | 跨 PID 拒绝；终态任务返回当前快照不变 |
 
 ### 调用示例
