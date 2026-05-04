@@ -464,6 +464,7 @@ shutdown 时引擎按以下顺序协同：
 
 - 把 `cancel_task` 看作"在 MCP 这一层立刻释放本地资源（worker 槽 / 内存 / store 配额）"的工具，而不是一个**节流上游配额**的工具。
 - 如果担心上游计费，第一选择仍然是**避免发起昂贵请求**（通过 `list_image_capabilities` 查看模型边界、或本地参数校验 fail-fast），其次才是 `cancel_task`。
+- **上游 safety filter 触发**亦不在 `cancel_task` 的语义内：实测同一 `edit_image` prompt 在同步路径会被上游改写为通用占位水印（单次失败即返回，无法本地重试），切换到 `submit_image_task` 异步路径后一次过（约 3 分钟 wall time）。**当观察到上游 safety 改写或 502/503 抖动较多时，将 `submit_image_task` 列为首选路径**——服务端持久化与 `get_task_result(wait=…)` 让客户端可以无副作用地等待并重排队，而同步路径每一次失败都会消耗一次 `tools/call` 预算。
 
 ### 长耗时调用的超时与上游异常
 

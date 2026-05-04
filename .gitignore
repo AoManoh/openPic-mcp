@@ -69,4 +69,7 @@ AGENTS.md
 docs/
 scripts/
 skills/
+
+# 本地草稿、临时素材、测试输入输出
+.tmp/
 .serena/
